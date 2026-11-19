@@ -24,7 +24,7 @@ class CheckinModal extends Modal {
       this.contentEl.empty();
       this.contentEl.createEl('p', { cls: 'gongdu-bad', text: e.message || '出错了' });
       if (e.status === 401 || e.code === 'no_token' || e.code === 'no_base') {
-        this.contentEl.createEl('p', { cls: 'gongdu-note', text: '到设置 → 共读打卡，填好网站地址和令牌（令牌在共读网站“我的”页面生成）。' });
+        this.contentEl.createEl('p', { cls: 'gongdu-note', text: '还没连上共读：在共读网站“我的”页面点「连接 Obsidian」，会自动打开这里连好。' });
       }
     }
   }

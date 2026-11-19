@@ -143,3 +143,27 @@ test('认得出 Qiaomu Reader 自己画的文字封面，真封面不会被认�
   // 形状不对
   assert.equal(isGeneratedCover(fakeGenerated(300, 300, PAPERS[0]), 300, 300), false);
 });
+
+test('连接共读：地址只收 https（本机测试收 http://localhost），连接码去掉空格横线、8 位', () => {
+  const C = require('../src/connect');
+  assert.equal(C.cleanServer('https://123.57.56.38:627/'), 'https://123.57.56.38:627');
+  assert.equal(C.cleanServer('http://127.0.0.1:8420'), 'http://127.0.0.1:8420');
+  assert.equal(C.cleanServer('http://example.com'), null);
+  assert.equal(C.cleanServer('javascript:alert(1)'), null);
+  assert.equal(C.cleanServer('https://u:p@example.com'), null);
+  assert.equal(C.cleanServer(''), null);
+  assert.equal(C.cleanCode(' k7qm 2xpa '), 'K7QM-2XPA');
+  assert.equal(C.cleanCode('K7QM-2XP'), null);
+});
+
+test('连接共读：用连接码换令牌；网站说不对时带上网站的说明', async () => {
+  const C = require('../src/connect');
+  const calls = [];
+  const ok = await C.exchange({ server: 'https://x.test/', code: 'k7qm-2xpa', request: async r => { calls.push(r); return { status: 200, json: { token: 'gd_abc', name: '张三', class_name: '视频采集' } }; } });
+  assert.deepEqual(ok, { base: 'https://x.test', token: 'gd_abc', name: '张三', class_name: '视频采集' });
+  assert.equal(calls[0].url, 'https://x.test/api/agent/connect');
+  assert.deepEqual(JSON.parse(calls[0].body), { code: 'K7QM-2XPA' });
+  await assert.rejects(C.exchange({ server: 'https://x.test', code: 'K7QM2XPA', request: async () => ({ status: 400, json: { message: '连接码不对或者过期了' } }) }), /过期/);
+  await assert.rejects(C.exchange({ server: 'https://x.test', code: 'K7QM2XPA', request: async () => { throw new Error('x'); } }), /连不上/);
+  await assert.rejects(C.exchange({ server: 'http://evil.test', code: 'K7QM2XPA', request: async () => ({}) }), /地址不对/);
+});
