@@ -1,9 +1,12 @@
 'use strict';
-// 读书打卡窗口：书、今天读了几分钟、读到哪里、挑今天的高亮（每句可以加想法）、换封面（可选），一屏打完。
+// 读书打卡窗口：书、今天读了几分钟、读到哪里、读书时摘的句子和今天的高亮（每句可以加想法）、换封面（可选），一屏打完。
+// 窗口开着的时候自动计时停下（写想法、粘贴不算读书时间）。
 const { Modal, TFile } = require('obsidian');
 const Q = require('./qiaomu');
 const { matchBook } = require('./match');
 const { readQiaomu } = require('./obsidian-io');
+const Clips = require('./clips');
+const Clock = require('./clock');
 
 const NEW = 'new';
 
@@ -14,6 +17,7 @@ class CheckinModal extends Modal {
   }
 
   async onOpen() {
+    this.plugin.checkinOpen = true;
     this.modalEl.addClass('gongdu-modal');
     this.titleEl.setText('读书打卡');
     this.contentEl.createEl('p', { cls: 'gongdu-note', text: '正在读阅读器的记录……' });
@@ -29,7 +33,11 @@ class CheckinModal extends Modal {
     }
   }
 
-  onClose() { this.contentEl.empty(); }
+  onClose() {
+    this.plugin.checkinOpen = false;
+    this.plugin.lastTick = Date.now(); // 窗口开着的这段不补算
+    this.contentEl.empty();
+  }
 
   /** 读网站的书架和今天的情况、阅读器的记录，选出这次打卡的那本书。 */
   async load() {
@@ -54,6 +62,10 @@ class CheckinModal extends Modal {
     }
     this.highlights = this.file ? Q.highlightsOn(this.qiaomu.highlights, this.file.path, day) : [];
     this.seconds = Q.secondsOn(this.qiaomu.settings, day);
+    // 插件自动记的：用本机的日期（和计时时一样）
+    const today = Q.dayOf(Date.now());
+    this.clockSeconds = this.file ? Clock.secondsOf(p.data.time, today, this.file.path) : 0;
+    this.clips = Clips.notIn(Clips.forBook(p.data.clips, today, this.file ? this.file.path : ''), this.highlights.map(h => h.text));
     this.percent = this.file ? Q.percentOf(this.qiaomu.progress, this.file.path) : null;
   }
 
@@ -90,14 +102,24 @@ class CheckinModal extends Modal {
     // 阅读器记的是今天所有书一起的时长。今天别的书已经记过的分钟要减掉，不然同一段时间算两次。
     const fromLog = Math.round(this.seconds / 60);
     const minNote = el.createEl('div', { cls: 'gongdu-note' });
+    const clockMin = Math.round(this.clockSeconds / 60);
     const fillMinutes = () => {
       const id = select.value === NEW ? null : Number(select.value);
-      const { value, others, mine } = Q.suggestMinutes(fromLog, [...(s.readings || []), ...(s.pending || [])], id);
+      const rows = [...(s.readings || []), ...(s.pending || [])];
+      if (clockMin > 0) {
+        // 插件按书自动记的时间。网站上同一本书再交是覆盖，所以不比已经交过的少（交过的可能还有纸书的时间）。
+        const found = id == null ? null : rows.find(r => r.book_id === id);
+        const mine = found ? found.minutes || 0 : 0;
+        minutes.value = String(Math.max(clockMin, mine));
+        minNote.setText(`插件自动记的：今天在这里读这本书 ${clockMin} 分钟（书开着、最近 3 分钟翻过页才算）。${mine > clockMin ? `网站上这本书今天已经记了 ${mine} 分钟，先填这个。` : ''}可以改。`);
+        return;
+      }
+      const { value, others, mine } = Q.suggestMinutes(fromLog, rows, id);
       minutes.value = value;
-      const parts = [fromLog > 0 ? `阅读器今天一共记了 ${fromLog} 分钟` : '阅读器今天没有计时'];
+      const parts = [fromLog > 0 ? `阅读器今天一共记了 ${fromLog} 分钟` : '今天还没有记到读这本书的时间'];
       if (others) parts.push(`别的书已经记了 ${others} 分钟`);
       if (mine) parts.push(`这本书已经记了 ${mine} 分钟（再交会换成下面填的数）`);
-      minNote.setText(parts.join('，') + (value ? '。可以改。' : '。请自己填这本书读了多久。'));
+      minNote.setText(parts.join('，') + (value ? '。可以改。' : '。请自己填这本书读了多久（以后在 Obsidian 里开着书读，会自动记）。'));
     };
     fillMinutes();
 
@@ -111,6 +133,22 @@ class CheckinModal extends Modal {
     // 摘录
     const exBox = el.createDiv({ cls: 'gongdu-excerpts' });
     const picked = [];
+    const clipped = [];
+    if (this.clips.length) {
+      exBox.createEl('h4', { text: `读书时摘的 · ${this.clips.length} 句` });
+      for (const c of this.clips) {
+        const row = exBox.createDiv({ cls: 'gongdu-hl' });
+        const label = row.createEl('label');
+        const box = label.createEl('input', { type: 'checkbox' });
+        box.checked = true;
+        label.createSpan({ text: c.text });
+        const thought = row.createEl('textarea', { cls: 'gongdu-thought', attr: { rows: '2', placeholder: '想法（可以不写）', maxlength: '500' } });
+        box.addEventListener('change', () => thought.toggleClass('gongdu-hidden', !box.checked));
+        const drop = row.createEl('button', { cls: 'gongdu-drop', text: '不要这句' });
+        drop.addEventListener('click', async () => { await this.plugin.dropClips([c.id]); row.remove(); clipped.splice(clipped.findIndex(x => x.c === c), 1); });
+        clipped.push({ c, box, thought });
+      }
+    }
     if (this.highlights.length) {
       exBox.createEl('h4', { text: `今天的高亮 · ${this.highlights.length} 句` });
       exBox.createEl('div', { cls: 'gongdu-note', text: '勾上想摘的句子，每句可以加自己的想法。' });
@@ -123,10 +161,17 @@ class CheckinModal extends Modal {
         box.addEventListener('change', () => thought.toggleClass('gongdu-hidden', !box.checked));
         picked.push({ hl, box, thought });
       }
-    } else {
-      exBox.createEl('div', { cls: 'gongdu-note', text: this.file ? '阅读器里今天这本书没有高亮。' : '没找到阅读器里正在读的书。' });
+    } else if (!this.clips.length) {
+      exBox.createEl('div', { cls: 'gongdu-note', text: this.file ? '今天还没摘句子。读书时在书里选中一句，点左边栏的共读按钮，就会摘到这里（阅读器里的高亮也会列在这里）。' : '没找到阅读器里正在读的书。' });
     }
     const own = el.createDiv({ cls: 'gongdu-field' });
+    // 有摘的或高亮时，“自己写一句”先收起来，要用再展开
+    if (this.clips.length || this.highlights.length) {
+      own.addClass('gongdu-hidden');
+      const more = el.createEl('button', { cls: 'gongdu-more', text: '自己再写一句' });
+      own.before(more);
+      more.addEventListener('click', () => { own.removeClass('gongdu-hidden'); more.remove(); own.querySelector('textarea').focus(); });
+    }
     own.createEl('label', { text: s.excerpts && s.excerpts.length ? `自己写一句（今天已经摘了 ${s.excerpts.length} 句，可以不写）` : '自己写一句', attr: { for: 'gongdu-own' } });
     const ownText = own.createEl('textarea', { attr: { id: 'gongdu-own', rows: '2', placeholder: '书里的一句话', maxlength: '1000' } });
     const ownThought = own.createEl('textarea', { cls: 'gongdu-thought', attr: { rows: '2', placeholder: '想法（可以不写）', maxlength: '500' } });
@@ -160,9 +205,11 @@ class CheckinModal extends Modal {
       if (!Number.isInteger(m) || m < 1 || m > 1440) return bad('分钟数要填 1–1440 之间的整数。');
       const pv = pct.value === '' ? null : Number(pct.value);
       if (pv === null || !Number.isFinite(pv) || pv < 0 || pv > 100) return bad('读到百分之几要填 0–100。');
-      const excerpts = picked.filter(x => x.box.checked).map(x => ({ text: x.hl.text, thought: x.thought.value.trim() || undefined }));
+      const fromClips = clipped.filter(x => x.box.checked);
+      const excerpts = fromClips.map(x => ({ text: x.c.text, thought: x.thought.value.trim() || undefined }));
+      excerpts.push(...picked.filter(x => x.box.checked).map(x => ({ text: x.hl.text, thought: x.thought.value.trim() || undefined })));
       if (ownText.value.trim()) excerpts.push({ text: ownText.value.trim(), thought: ownThought.value.trim() || undefined });
-      if (!excerpts.length && !(s.excerpts && s.excerpts.length)) return bad('今天还没有摘录：至少勾一句高亮，或者自己写一句。');
+      if (!excerpts.length && !(s.excerpts && s.excerpts.length)) return bad('今天还没有摘录：至少勾一句，或者自己写一句。');
       const body = { minutes: m, percent: Math.round(pv * 10) / 10 };
       if (select.value === NEW) {
         if (!titleInput.value.trim()) return bad('请填书名。');
@@ -177,6 +224,7 @@ class CheckinModal extends Modal {
         const bookId = out.book_id || body.book_id;
         const lines = [`打好了。连续 ${out.streak} 天，班里今天 ${out.class_done}/${out.class_total} 人读了。`];
         if (this.file && bookId) await this.plugin.remember(this.file.path, bookId);
+        await this.plugin.dropClips(fromClips.map(x => x.c.id));
         this.plugin.sync.forget();
         // 封面：勾了换封面就换；没勾就按平常的规则（网站上没有才传）。
         if (this.file && bookId) {

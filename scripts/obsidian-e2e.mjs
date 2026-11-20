@@ -2,7 +2,8 @@
 // 用法：node scripts/obsidian-e2e.mjs <放用户数据和截图的文件夹> <库的路径> <步骤.json>
 // 步骤是一个数组，每步一种：
 //   ["eval", "JS（可以 await，return 的值会打出来）", "标签"]
-//   ["wait", 毫秒]  ["move", x, y]（移动鼠标）  ["shot", "文件名"]（截图存到第一个文件夹）
+//   ["wait", 毫秒]  ["move", x, y]（移动鼠标）  ["click", x, y]（真的点一下）  ["key", "ArrowRight"]（真的按一下键）
+//   ["shot", "文件名"]（截图存到第一个文件夹）
 //   ["server", "共读网站的接口地址", "令牌", "r => 要打出来的部分"]
 // 第一步一般是：if (!app.plugins.isEnabled()) app.plugins.setEnable(true); 然后等两个插件加载好。
 // 可以把平时用的 ~/Library/Application Support/obsidian/obsidian-<版本>.asar 复制到用户数据文件夹，用同一个版本。
@@ -36,10 +37,13 @@ const send = (method, params = {}) => new Promise(r => { pend.set(++id, r); ws.s
 await send('Runtime.enable'); await send('Page.enable');
 const ev = async expr => { const r = await send('Runtime.evaluate', { expression: `(async () => { ${expr} })()`, awaitPromise: true, returnByValue: true }); return r.exceptionDetails ? 'ERR ' + (r.exceptionDetails.exception?.description || r.exceptionDetails.text) : r.result?.value; };
 for (let i = 0; i < 60; i++) { if (await ev('return typeof app !== "undefined" && !!app.workspace && app.workspace.layoutReady')) break; await sleep(500); }
+await send('Emulation.setFocusEmulationEnabled', { enabled: true }); // 窗口不在最前面也当作有焦点（自动计时要看焦点）
 await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 820, deviceScaleFactor: 1, mobile: false });
 for (const s of steps) {
   if (s[0] === 'wait') { await sleep(s[1]); continue; }
   if (s[0] === 'move') { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: s[1], y: s[2] }); continue; }
+  if (s[0] === 'click') { for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: s[1], y: s[2], button: 'left', clickCount: 1 }); continue; }
+  if (s[0] === 'key') { const code = s[1]; const vk = { ArrowRight: 39, ArrowLeft: 37, ArrowDown: 40 }[code] || 0; for (const type of ['rawKeyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: code, code, windowsVirtualKeyCode: vk }); continue; }
   if (s[0] === 'shot') { const r = await send('Page.captureScreenshot', { format: 'png' }); const f = path.join(S, s[1] + '.png'); fs.writeFileSync(f, Buffer.from(r.data, 'base64')); console.log('shot>', f); continue; }
   if (s[0] === 'server') { const r = await (await fetch(s[1], { headers: { Authorization: 'Bearer ' + s[2] } })).json(); console.log('server>', JSON.stringify(s[3] ? eval(s[3])(r) : r)); continue; }
   console.log((s[2] || 'eval') + '>', JSON.stringify(await ev(s[1])));

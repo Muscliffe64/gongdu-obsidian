@@ -25,3 +25,5 @@
 .gongdu-hl input[type="checkbox"], .gongdu-check input { margin-top: 0.35em; flex: none; }
 .gongdu-thought { font-size: var(--font-ui-small); }
 .gongdu-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.gongdu-hl .gongdu-drop { align-self: flex-end; font-size: var(--font-ui-smaller); padding: 2px 8px; height: auto; }
+.gongdu-more { align-self: flex-start; }
