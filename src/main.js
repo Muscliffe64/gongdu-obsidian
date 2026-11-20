@@ -23,6 +23,7 @@ const DEFAULTS = {
   links: {},   // 文件路径 → 共读书架上的书 id（打卡时确认过的）
   covers: {},  // 书 id → { sig, result, at }：封面传没传过
   time: {},    // 自动计时：{ "YYYY-MM-DD": { 书的路径: 秒 } }
+  committed: {}, // 打卡时已经算进去的插件秒数：{ "YYYY-MM-DD": { 书的路径: 秒 } }
   clips: [],   // 读书时摘下、还没打卡交上去的句子
 };
 
@@ -56,6 +57,7 @@ class GongduPlugin extends Plugin {
     this.data.links = this.data.links || {};
     this.data.covers = this.data.covers || {};
     this.data.time = Clock.prune(this.data.time || {});
+    this.data.committed = Clock.prune(this.data.committed || {});
     this.data.clips = Clips.pruneDays(Array.isArray(this.data.clips) ? this.data.clips : [], Q.dayOf(Date.now()));
     this.finder = createCoverFinder(this.app);
     this.sync = new CoverSync({
@@ -105,6 +107,7 @@ class GongduPlugin extends Plugin {
     this.registerInterval(window.setInterval(() => this.tickClock(), Clock.TICK_MS));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       Clock.rename(this.data.time, oldPath, file.path);
+      Clock.rename(this.data.committed, oldPath, file.path);
       for (const c of this.data.clips) if (c.book === oldPath) c.book = file.path;
       this.saveSoon();
     }));
@@ -144,7 +147,7 @@ class GongduPlugin extends Plugin {
     this.lastTick = now;
     if (!added) return;
     this.unsaved += added;
-    if (this.unsaved >= 60) { this.unsaved = 0; Clock.prune(this.data.time); this.saveSoon(); }
+    if (this.unsaved >= 60) { this.unsaved = 0; Clock.prune(this.data.time); Clock.prune(this.data.committed); this.saveSoon(); }
   }
 
   /** 今天在插件里记的分钟：给书就是这本书，不给就是所有书。 */

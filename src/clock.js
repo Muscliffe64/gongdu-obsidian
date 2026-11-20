@@ -49,4 +49,21 @@ function rename(log, from, to) {
   }
 }
 
-module.exports = { tick, secondsOf, prune, rename, IDLE_MS, TICK_MS, MAX_STEP_MS };
+/**
+ * 打卡窗口里“今天读了几分钟”先填多少（插件记到时间的时候）。
+ * 网站上这本书今天已经记的分钟（siteMin，可能有纸书、或者以前交过的）保留，
+ * 再加上插件记了、还没交上去过的时间：clockSec − committedSec（committedSec：之前打卡时已经算进去的插件秒数）。
+ * 这样以前记的不会被盖掉，插件已经交过的也不会算两遍。返回 { value, fresh }（分钟）。
+ */
+function prefillMinutes({ siteMin = 0, clockSec = 0, committedSec = 0 }) {
+  const fresh = Math.max(0, Math.round((clockSec - committedSec) / 60));
+  return { value: Math.min(1440, (siteMin || 0) + fresh), fresh };
+}
+
+/** 打卡成功后记下这次算进去的插件秒数（按天、按书）。 */
+function commit(committed, day, book, sec) {
+  const today = committed[day] || (committed[day] = {});
+  today[book] = Math.max(today[book] || 0, sec || 0);
+}
+
+module.exports = { tick, secondsOf, prune, rename, prefillMinutes, commit, IDLE_MS, TICK_MS, MAX_STEP_MS };

@@ -64,7 +64,9 @@ class CheckinModal extends Modal {
     this.seconds = Q.secondsOn(this.qiaomu.settings, day);
     // 插件自动记的：用本机的日期（和计时时一样）
     const today = Q.dayOf(Date.now());
+    this.clockDay = today;
     this.clockSeconds = this.file ? Clock.secondsOf(p.data.time, today, this.file.path) : 0;
+    this.committedSeconds = this.file ? Clock.secondsOf(p.data.committed, today, this.file.path) : 0;
     this.clips = Clips.notIn(Clips.forBook(p.data.clips, today, this.file ? this.file.path : ''), this.highlights.map(h => h.text));
     this.percent = this.file ? Q.percentOf(this.qiaomu.progress, this.file.path) : null;
   }
@@ -107,11 +109,13 @@ class CheckinModal extends Modal {
       const id = select.value === NEW ? null : Number(select.value);
       const rows = [...(s.readings || []), ...(s.pending || [])];
       if (clockMin > 0) {
-        // 插件按书自动记的时间。网站上同一本书再交是覆盖，所以不比已经交过的少（交过的可能还有纸书的时间）。
+        // 网站上同一本书再交是覆盖：已经记的（纸书、以前交过的）保留，加上插件记了还没交过的。
         const found = id == null ? null : rows.find(r => r.book_id === id);
         const mine = found ? found.minutes || 0 : 0;
-        minutes.value = String(Math.max(clockMin, mine));
-        minNote.setText(`插件自动记的：今天在这里读这本书 ${clockMin} 分钟（书开着、最近 3 分钟翻过页才算）。${mine > clockMin ? `网站上这本书今天已经记了 ${mine} 分钟，先填这个。` : ''}可以改。`);
+        const { value, fresh } = Clock.prefillMinutes({ siteMin: mine, clockSec: this.clockSeconds, committedSec: this.committedSeconds });
+        minutes.value = value > 0 ? String(value) : '';
+        const head = `插件自动记的：今天在这里读这本书 ${clockMin} 分钟（书开着、最近 3 分钟翻过页才算）。`;
+        minNote.setText(head + (mine ? `网站上这本书今天已经记了 ${mine} 分钟，${fresh ? `加上还没交过的 ${fresh} 分钟` : '插件记的都交过了'}。` : '') + '可以改。');
         return;
       }
       const { value, others, mine } = Q.suggestMinutes(fromLog, rows, id);
@@ -145,7 +149,14 @@ class CheckinModal extends Modal {
         const thought = row.createEl('textarea', { cls: 'gongdu-thought', attr: { rows: '2', placeholder: '想法（可以不写）', maxlength: '500' } });
         box.addEventListener('change', () => thought.toggleClass('gongdu-hidden', !box.checked));
         const drop = row.createEl('button', { cls: 'gongdu-drop', text: '不要这句' });
-        drop.addEventListener('click', async () => { await this.plugin.dropClips([c.id]); row.remove(); clipped.splice(clipped.findIndex(x => x.c === c), 1); });
+        drop.addEventListener('click', async () => {
+          drop.disabled = true;
+          await this.plugin.dropClips([c.id]);
+          row.remove();
+          Clips.dropFrom(clipped, x => x.c === c);
+          countNote();
+        });
+        box.addEventListener('change', () => countNote());
         clipped.push({ c, box, thought });
       }
     }
@@ -158,12 +169,20 @@ class CheckinModal extends Modal {
         const box = label.createEl('input', { type: 'checkbox' });
         label.createSpan({ text: hl.text });
         const thought = row.createEl('textarea', { cls: 'gongdu-thought gongdu-hidden', attr: { rows: '2', placeholder: '想法（可以不写）', maxlength: '500' } });
-        box.addEventListener('change', () => thought.toggleClass('gongdu-hidden', !box.checked));
+        box.addEventListener('change', () => { thought.toggleClass('gongdu-hidden', !box.checked); countNote(); });
         picked.push({ hl, box, thought });
       }
     } else if (!this.clips.length) {
       exBox.createEl('div', { cls: 'gongdu-note', text: this.file ? '今天还没摘句子。读书时在书里选中一句，点左边栏的共读按钮，就会摘到这里（阅读器里的高亮也会列在这里）。' : '没找到阅读器里正在读的书。' });
     }
+    const overNote = el.createEl('div', { cls: 'gongdu-note gongdu-bad gongdu-hidden' });
+    const ticked = () => clipped.filter(x => x.box.checked).length + picked.filter(x => x.box.checked).length;
+    function countNote() {
+      const n = ticked();
+      overNote.toggleClass('gongdu-hidden', n <= Clips.MAX_SEND);
+      overNote.setText(`勾了 ${n} 句。网站一次最多收 ${Clips.MAX_SEND} 句，这次先交前 ${Clips.MAX_SEND} 句，读书时摘的其余的留在这里，下次打卡再交。`);
+    }
+    countNote();
     const own = el.createDiv({ cls: 'gongdu-field' });
     // 有摘的或高亮时，“自己写一句”先收起来，要用再展开
     if (this.clips.length || this.highlights.length) {
@@ -205,10 +224,14 @@ class CheckinModal extends Modal {
       if (!Number.isInteger(m) || m < 1 || m > 1440) return bad('分钟数要填 1–1440 之间的整数。');
       const pv = pct.value === '' ? null : Number(pct.value);
       if (pv === null || !Number.isFinite(pv) || pv < 0 || pv > 100) return bad('读到百分之几要填 0–100。');
-      const fromClips = clipped.filter(x => x.box.checked);
-      const excerpts = fromClips.map(x => ({ text: x.c.text, thought: x.thought.value.trim() || undefined }));
-      excerpts.push(...picked.filter(x => x.box.checked).map(x => ({ text: x.hl.text, thought: x.thought.value.trim() || undefined })));
-      if (ownText.value.trim()) excerpts.push({ text: ownText.value.trim(), thought: ownThought.value.trim() || undefined });
+      // 一次最多交 20 句（网站只收前 20 句）：自己写的放最前面（关了窗口就没了），再是摘的，再是高亮。
+      const all = [];
+      if (ownText.value.trim()) all.push({ kind: 'own', ex: { text: ownText.value.trim(), thought: ownThought.value.trim() || undefined } });
+      for (const x of clipped.filter(y => y.box.checked)) all.push({ kind: 'clip', clip: x.c, ex: { text: x.c.text, thought: x.thought.value.trim() || undefined } });
+      for (const x of picked.filter(y => y.box.checked)) all.push({ kind: 'hl', ex: { text: x.hl.text, thought: x.thought.value.trim() || undefined } });
+      const { send, held } = Clips.planSend(all);
+      const excerpts = send.map(x => x.ex);
+      const sentClips = send.filter(x => x.kind === 'clip').map(x => x.clip);
       if (!excerpts.length && !(s.excerpts && s.excerpts.length)) return bad('今天还没有摘录：至少勾一句，或者自己写一句。');
       const body = { minutes: m, percent: Math.round(pv * 10) / 10 };
       if (select.value === NEW) {
@@ -224,7 +247,14 @@ class CheckinModal extends Modal {
         const bookId = out.book_id || body.book_id;
         const lines = [`打好了。连续 ${out.streak} 天，班里今天 ${out.class_done}/${out.class_total} 人读了。`];
         if (this.file && bookId) await this.plugin.remember(this.file.path, bookId);
-        await this.plugin.dropClips(fromClips.map(x => x.c.id));
+        // 只去掉网站真的存下了的摘句；没交上去的、没存下的都留在本机。
+        const savedIds = Clips.acceptedIds(sentClips, out.excerpts);
+        await this.plugin.dropClips(savedIds);
+        const left = this.plugin.data.clips.filter(c => c.day === this.clockDay && (!this.file || c.book === this.file.path)).length;
+        if (left) lines.push(`还有 ${left} 句摘的没交上去，留在这里，下次打卡时会列出来。`);
+        if (held.length && held.some(x => x.kind !== 'clip')) lines.push(`超过 ${Clips.MAX_SEND} 句的高亮这次没交，可以再打一次卡勾上。`);
+        // 记下这次算进去的插件时间，下次不再重复加
+        if (this.file && this.clockSeconds) { Clock.commit(this.plugin.data.committed, this.clockDay, this.file.path, this.clockSeconds); this.plugin.saveSoon(); }
         this.plugin.sync.forget();
         // 封面：勾了换封面就换；没勾就按平常的规则（网站上没有才传）。
         if (this.file && bookId) {

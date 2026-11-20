@@ -69,3 +69,50 @@ test('摘句：太长截到 1000 字；交上去的去掉；和高亮一样的�
   assert.deepEqual(Clips.notIn(list, ['高亮过的  一句']).map(c => c.id), [long.clip.id]);
   assert.deepEqual(Clips.remove(list, [long.clip.id]).map(c => c.id), [two.clip.id]);
 });
+
+test('分钟先填多少：网站上已经记的保留，加上插件还没交过的（没交过插件时间）', () => {
+  // 纸书记了 45 分钟，插件今天在 Obsidian 里记了 30 分钟，还没交过 → 75
+  assert.deepEqual(Clock.prefillMinutes({ siteMin: 45, clockSec: 30 * 60, committedSec: 0 }), { value: 75, fresh: 30 });
+  // 网站上什么也没有 → 就是插件记的
+  assert.deepEqual(Clock.prefillMinutes({ siteMin: 0, clockSec: 30 * 60 }), { value: 30, fresh: 30 });
+});
+
+test('分钟先填多少：插件已经交过的不重复算', () => {
+  // 上次打卡交了 75（45 纸书 + 插件 30），记下插件交过 30 分钟；之后又读了 10 分钟，插件一共 40 → 85
+  const committed = {};
+  Clock.commit(committed, '2026-11-21', 'b.epub', 30 * 60);
+  const sec = Clock.secondsOf(committed, '2026-11-21', 'b.epub');
+  assert.deepEqual(Clock.prefillMinutes({ siteMin: 75, clockSec: 40 * 60, committedSec: sec }), { value: 85, fresh: 10 });
+  // 交过以后没再读 → 就是网站上的，不加
+  assert.deepEqual(Clock.prefillMinutes({ siteMin: 75, clockSec: 30 * 60, committedSec: sec }), { value: 75, fresh: 0 });
+  // commit 只往大里记
+  Clock.commit(committed, '2026-11-21', 'b.epub', 10 * 60);
+  assert.equal(Clock.secondsOf(committed, '2026-11-21', 'b.epub'), 30 * 60);
+  // 不超过 1440
+  assert.equal(Clock.prefillMinutes({ siteMin: 1430, clockSec: 60 * 60 }).value, 1440);
+});
+
+test('不要这句：找不到时不删别的（findIndex 是 -1 时不能 splice 掉最后一个）', () => {
+  const arr = [{ id: 'a' }, { id: 'b' }];
+  assert.equal(Clips.dropFrom(arr, x => x.id === 'zzz'), false);
+  assert.deepEqual(arr.map(x => x.id), ['a', 'b']);
+  assert.equal(Clips.dropFrom(arr, x => x.id === 'a'), true);
+  assert.deepEqual(arr.map(x => x.id), ['b']);
+  assert.equal(Clips.dropFrom(arr, x => x.id === 'a'), false, '点两次也只删一次');
+  assert.deepEqual(arr.map(x => x.id), ['b']);
+});
+
+test('摘句：一次最多交 20 句；两个字以下的不摘（网站不收）', () => {
+  const items = Array.from({ length: 25 }, (_, i) => i);
+  const { send, held } = Clips.planSend(items);
+  assert.equal(send.length, 20);
+  assert.deepEqual(held, [20, 21, 22, 23, 24]);
+  assert.equal(Clips.add([], { text: '嗯', book: 'b', day: 'd', now: 1 }), null);
+});
+
+test('摘句：只有网站存下了的才算交上去（文字比较和网站一样做 NFC、合并空白）', () => {
+  const sent = [{ id: 1, text: 'café 一句' }, { id: 2, text: '没存下的' }];
+  const server = [{ text: 'café   一句' }, { text: '别的' }];
+  assert.deepEqual(Clips.acceptedIds(sent, server), [1]);
+  assert.deepEqual(Clips.acceptedIds(sent, undefined), []);
+});
