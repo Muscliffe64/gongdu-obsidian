@@ -172,3 +172,30 @@ test('插件打卡：按书名加的新书，打完马上能传封面', { skip }
   const { s } = syncer(w.api, { titles: ['额尔古纳河右岸'] });
   assert.equal(await s.sync(file('Books/额尔古纳河右岸.epub'), { force: true }), 'set');
 });
+
+test('摘了 25 句：只交前 20 句，网站存下的才从本机去掉，其余 5 句留着', { skip }, async t => {
+  const Clips = require('../src/clips');
+  const w = await world(t);
+  const clips = [];
+  for (let i = 1; i <= 25; i++) Clips.add(clips, { text: `第 ${i} 句：读书是一件慢慢来的事情。`, book: 'Books/乡土中国.epub', day: 'd', now: i });
+  // 一句以前已经交过（网站上有），一句太短会被网站跳过：都在前 20 句里
+  clips[0].text = '人是为活着本身而活着的。';
+  await w.api.checkin({ book_id: w.book.id, minutes: 10, percent: 5, excerpts: [{ text: clips[0].text }] });
+  const { send, held } = Clips.planSend(Clips.forBook(clips, 'd', 'Books/乡土中国.epub'));
+  assert.equal(send.length, 20);
+  assert.equal(held.length, 5);
+  const out = await w.api.checkin({ book_id: w.book.id, minutes: 20, percent: 8, excerpts: send.map(c => ({ text: c.text })) });
+  const saved = Clips.acceptedIds(send, out.excerpts);
+  assert.equal(saved.length, 20, '前 20 句都存下了（交过的那句也算）');
+  const left = Clips.remove(clips, saved);
+  assert.deepEqual(left.map(c => c.id), held.map(c => c.id), '没交的 5 句留在本机');
+  assert.equal(out.excerpts.length, 20);
+
+  // 网站只收前 20 句：一次交 25 句时，后 5 句不会被当成交上去
+  const more = [];
+  for (let i = 1; i <= 25; i++) Clips.add(more, { text: `另一批第 ${i} 句，慢慢读。`, book: 'b', day: 'd', now: i });
+  const out2 = await w.api.checkin({ book_id: w.book.id, minutes: 20, percent: 8, excerpts: more.map(c => ({ text: c.text })) });
+  const saved2 = Clips.acceptedIds(more, out2.excerpts);
+  assert.equal(saved2.length, 20);
+  assert.deepEqual(Clips.remove(more, saved2).map(c => c.text), more.slice(20).map(c => c.text));
+});

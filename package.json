@@ -1,6 +1,6 @@
 {
   "name": "gongdu-obsidian",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "共读打卡 · Obsidian 插件（和 Qiaomu Reader 一起用）",
   "engines": { "node": ">=22" },

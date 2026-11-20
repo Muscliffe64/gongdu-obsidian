@@ -1,15 +1,20 @@
 'use strict';
 // 共读打卡：Obsidian 插件。和 Qiaomu Reader（乔木阅读器）一起用。
 // - 状态栏：今天读了几分钟、打卡了没有；点一下打开打卡窗口。
+// - 自动计时：在 Qiaomu Reader 里读书、最近 3 分钟有翻页或滚动才算，按书记（见 clock.js）。
+// - 摘句：在书里选中一句，点左边栏的共读按钮（或「摘下选中的句子」命令），打卡时默认勾上（见 clips.js）。
 // - 读书打卡：命令面板、左边栏按钮、状态栏都能打开。
 // - 打开一本书时，在后台把封面传到共读书架上对应的书（只传网站上还没有封面图的）。
-const { Plugin, Modal, TFile, PluginSettingTab, Setting, requestUrl } = require('obsidian');
+const { Plugin, Modal, Notice, TFile, PluginSettingTab, Setting, requestUrl } = require('obsidian');
 const Q = require('./qiaomu');
 const { createApi } = require('./api');
 const { CoverSync } = require('./cover-sync');
 const { createCoverFinder, readQiaomu } = require('./obsidian-io');
 const { CheckinModal } = require('./checkin-modal');
 const C = require('./connect');
+const Clock = require('./clock');
+const Clips = require('./clips');
+const R = require('./reader-dom');
 
 const DEFAULTS = {
   base: 'https://123.57.56.38:627',
@@ -17,6 +22,9 @@ const DEFAULTS = {
   autoCover: true,
   links: {},   // 文件路径 → 共读书架上的书 id（打卡时确认过的）
   covers: {},  // 书 id → { sig, result, at }：封面传没传过
+  time: {},    // 自动计时：{ "YYYY-MM-DD": { 书的路径: 秒 } }
+  committed: {}, // 打卡时已经算进去的插件秒数：{ "YYYY-MM-DD": { 书的路径: 秒 } }
+  clips: [],   // 读书时摘下、还没打卡交上去的句子
 };
 
 const NOTE_MS = 60 * 1000;
@@ -48,6 +56,9 @@ class GongduPlugin extends Plugin {
     this.data = Object.assign({}, DEFAULTS, await this.loadData());
     this.data.links = this.data.links || {};
     this.data.covers = this.data.covers || {};
+    this.data.time = Clock.prune(this.data.time || {});
+    this.data.committed = Clock.prune(this.data.committed || {});
+    this.data.clips = Clips.pruneDays(Array.isArray(this.data.clips) ? this.data.clips : [], Q.dayOf(Date.now()));
     this.finder = createCoverFinder(this.app);
     this.sync = new CoverSync({
       api: { status: () => this.api().status(), uploadCover: (id, b) => this.api().uploadCover(id, b) },
@@ -65,6 +76,7 @@ class GongduPlugin extends Plugin {
     this.registerDomEvent(this.bar, 'click', () => this.openCheckin());
 
     this.addCommand({ id: 'checkin', name: '读书打卡', callback: () => this.openCheckin() });
+    this.addCommand({ id: 'clip', name: '摘下选中的句子（打卡时会列出来）', callback: () => this.clipSelection(true) });
     this.addCommand({ id: 'sync-cover', name: '再试一次同步这本书的封面', callback: () => this.retryCover() });
     // 左边栏的按钮。Qiaomu Reader 读书时会藏起状态栏，所以有提示时也在这个按钮上标一个小点，点开打卡窗口能看到是什么。
     this.ribbon = this.addRibbonIcon('book-open-check', '共读：读书打卡', () => this.openCheckin());
@@ -83,9 +95,87 @@ class GongduPlugin extends Plugin {
       this.onOpen(this.currentBook());
     });
     this.registerInterval(window.setInterval(() => this.refreshBar(), 5 * 60 * 1000));
+
+    // 自动计时：外面的 document 和阅读页里（shadow DOM、iframe）的点击、按键、滚动都算“在读”。
+    this.lastActive = 0;
+    this.lastTick = 0;
+    this.unsaved = 0;
+    this.watched = new WeakSet();
+    const mark = () => { this.lastActive = Date.now(); };
+    for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) this.registerDomEvent(document, ev, mark, { capture: true, passive: true });
+    this.markActive = mark;
+    this.registerInterval(window.setInterval(() => this.tickClock(), Clock.TICK_MS));
+    this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+      Clock.rename(this.data.time, oldPath, file.path);
+      Clock.rename(this.data.committed, oldPath, file.path);
+      for (const c of this.data.clips) if (c.book === oldPath) c.book = file.path;
+      this.saveSoon();
+    }));
   }
 
-  onunload() { window.clearTimeout(this.saveTimer); window.clearTimeout(this.noteTimer); }
+  onunload() {
+    window.clearTimeout(this.saveTimer); window.clearTimeout(this.noteTimer);
+    if (this.unsaved) this.saveData(this.data);
+  }
+
+  /** 正在看的标签页里的书和这个标签页（只看当前标签页，侧边栏开着的书不算在读）。 */
+  readingLeaf() {
+    const ws = this.app.workspace;
+    const leaf = ws.getMostRecentLeaf ? ws.getMostRecentLeaf() : ws.activeLeaf;
+    const file = bookFileIn(this.app, leaf);
+    return file ? { leaf, file } : null;
+  }
+
+  /** 每 15 秒一次：在读就把这段时间记到这本书上。 */
+  tickClock() {
+    const now = Date.now();
+    const r = this.readingLeaf();
+    if (r && r.leaf.view && r.leaf.view.containerEl) R.watchActivity(r.leaf.view.containerEl, this.markActive, this.watched);
+    // 阅读器的进度变了也算翻过页（有的翻页方式外面收不到事件）
+    if (r) {
+      const qm = this.app.plugins && this.app.plugins.plugins && this.app.plugins.plugins[Q.PLUGIN_ID];
+      const pr = qm && qm.progress && qm.progress[r.file.path];
+      const sig = pr ? `${r.file.path}|${pr.pct}|${pr.percent}` : '';
+      if (sig && this.progressSig && sig !== this.progressSig) this.lastActive = now;
+      this.progressSig = sig;
+    }
+    const added = Clock.tick(this.data.time, this.lastTick, {
+      now, day: Q.dayOf(now), book: r ? r.file.path : '',
+      focused: document.hasFocus() && document.visibilityState !== 'hidden',
+      lastActive: this.lastActive, paused: !!this.checkinOpen,
+    });
+    this.lastTick = now;
+    if (!added) return;
+    this.unsaved += added;
+    if (this.unsaved >= 60) { this.unsaved = 0; Clock.prune(this.data.time); Clock.prune(this.data.committed); this.saveSoon(); }
+  }
+
+  /** 今天在插件里记的分钟：给书就是这本书，不给就是所有书。 */
+  minutesToday(path) { return Math.round(Clock.secondsOf(this.data.time, Q.dayOf(Date.now()), path) / 60); }
+
+  /**
+   * 把阅读页里选中的句子摘下来。loud：没选中或摘好了都说一句（用命令时）；
+   * 打开打卡窗口前顺手摘的时候不出声，窗口里能看到。
+   */
+  clipSelection(loud = false) {
+    const r = this.readingLeaf();
+    const text = r && r.leaf.view && r.leaf.view.containerEl ? R.selectedText(r.leaf.view.containerEl) : '';
+    if (!text) { if (loud) new Notice('先在书里选中一句话，再摘。'); return null; }
+    const day = Q.dayOf(Date.now());
+    this.data.clips = Clips.pruneDays(this.data.clips, day);
+    const out = Clips.add(this.data.clips, { text, book: r.file.path, day, now: Date.now() });
+    if (!out) return null;
+    this.saveSoon();
+    if (loud) new Notice(out.added ? `摘下了：「${out.clip.text.slice(0, 30)}${out.clip.text.length > 30 ? '…' : ''}」，打卡时会列出来。` : '这句已经摘过了。');
+    return out;
+  }
+
+  /** 交上去的摘句去掉。 */
+  async dropClips(ids) {
+    if (!ids.length) return;
+    this.data.clips = Clips.remove(this.data.clips, ids);
+    await this.saveData(this.data);
+  }
 
   api() { return createApi({ base: this.data.base, token: this.data.token, request: obsidianRequest }); }
 
@@ -99,7 +189,11 @@ class GongduPlugin extends Plugin {
     await this.saveData(this.data);
   }
 
-  openCheckin() { new CheckinModal(this.app, this).open(); }
+  /** 打开打卡窗口。阅读页里正好选中了一句，先把它摘下来（窗口里默认勾上）。 */
+  openCheckin() {
+    this.clipSelection(false);
+    new CheckinModal(this.app, this).open();
+  }
 
   /** 用连接码连上共读：换到令牌，存好地址和令牌，马上刷新状态，再同步一次正在读的书的封面。 */
   async connect(server, code) {
@@ -168,8 +262,9 @@ class GongduPlugin extends Plugin {
     try {
       const qm = await readQiaomu(this.app);
       const status = await this.sync.status(force);
-      const m = Math.round(Q.secondsOn(qm.settings, status.day || Q.dayOf(Date.now())) / 60);
-      text = `共读 · ${m ? `阅读器今天 ${m} 分钟 · ` : ''}${status.checked ? '今天打过卡了' : '今天还没打卡'}`;
+      const mine = this.minutesToday();
+      const m = mine || Math.round(Q.secondsOn(qm.settings, status.day || Q.dayOf(Date.now())) / 60);
+      text = `共读 · ${m ? `今天读了 ${m} 分钟 · ` : ''}${status.checked ? '今天打过卡了' : '今天还没打卡'}`;
     } catch (e) {
       text = e && e.status === 401 ? '共读 · 连接失效了，到共读网站重新连接' : '共读 · 没连上';
     }
