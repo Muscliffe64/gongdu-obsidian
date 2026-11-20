@@ -54,7 +54,7 @@ Qiaomu Reader 的阅读页不算 Obsidian 的“当前文件”，打开书时�
 
 还没上架 Obsidian 社区插件。两种装法：
 
-- **BRAT**：装 BRAT 插件 → Add beta plugin → 填这个仓库（需要仓库是公开的，并且发布了 Release，附上 `main.js`、`manifest.json`、`styles.css`）。
+- **BRAT**（推荐）：装 BRAT 插件 → Add Beta plugin → 填 `Muscliffe64/gongdu-obsidian`。给学生的完整步骤见 [INSTALL.md](INSTALL.md)。
 - **手动**：把这三个文件放进库里的 `.obsidian/plugins/gongdu/`，在设置 → 第三方插件里打开「共读打卡」。
 
 ## 开发
@@ -79,6 +79,10 @@ npm test                   # node:test；cover-sync 的测试会起一个本机�
 | `src/generated-cover.js` | 认出 Qiaomu Reader 自己画的文字封面 |
 | `src/match.js` | 把阅读器里的书对到共读书架上的书 |
 | `src/api.js` | 共读网站的智能体接口 |
+
+### 发布新版本
+
+改 `manifest.json` 的 `version`，在 `versions.json` 里加一行，合并到 `main` 以后推一个**同名、不带 v** 的标签（比如 `0.1.1`）。GitHub Action（`.github/workflows/release.yml`）会跑测试、打包，发布 Release 并附上 `main.js`、`manifest.json`、`styles.css`。
 
 ### 在真的 Obsidian 里试
 
