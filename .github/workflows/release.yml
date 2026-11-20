@@ -1,0 +1,32 @@
+# 推一个和 manifest.json 里 version 一样的标签（不带 v，比如 0.1.0），就打包并发布 Release。
+# BRAT 从 Release 里下载 main.js、manifest.json、styles.css，三个文件分开附上。
+name: Release
+
+on:
+  push:
+    tags: ['*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 标签要和 manifest.json、versions.json 对得上
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          ver=$(node -p "require('./manifest.json').version")
+          if [ "$tag" != "$ver" ]; then echo "标签 $tag 和 manifest.json 的 version $ver 不一样"; exit 1; fi
+          node -e "const v=require('./versions.json'); if(!v['$ver']) { console.error('versions.json 里没有 $ver'); process.exit(1) }"
+      # 共读网站的仓库是私有的，这里拿不到，cover-sync 的测试会跳过；其余测试照跑。
+      - run: npm test
+      - run: node build.js
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css --title "$GITHUB_REF_NAME" --notes "共读打卡 $GITHUB_REF_NAME。用 BRAT 安装的说明见 INSTALL.md。"

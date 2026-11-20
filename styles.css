@@ -1,0 +1,27 @@
+/* 共读打卡 */
+.gongdu-bar.gongdu-warn { color: var(--text-error); }
+.gongdu-bar.gongdu-hint { color: var(--text-accent); }
+/* 左边栏按钮上的小点：有提示（蓝）或出了问题（红） */
+.gongdu-ribbon { position: relative; }
+.gongdu-ribbon.gongdu-attn-hint::after, .gongdu-ribbon.gongdu-attn-warn::after {
+  content: ''; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--interactive-accent);
+}
+.gongdu-ribbon.gongdu-attn-warn::after { background: var(--text-error); }
+
+.gongdu-modal .modal-content { display: flex; flex-direction: column; gap: 10px; }
+.gongdu-field { display: flex; flex-direction: column; gap: 6px; }
+.gongdu-field.gongdu-inline { flex-direction: row; align-items: center; gap: 8px; }
+.gongdu-field.gongdu-inline input { width: 6em; }
+.gongdu-field textarea, .gongdu-newtitle { width: 100%; }
+.gongdu-note { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.gongdu-ok { color: var(--text-success); }
+.gongdu-bad { color: var(--text-error); }
+.gongdu-msg:empty { display: none; }
+.gongdu-hidden { display: none !important; }
+.gongdu-excerpts { display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow-y: auto; }
+.gongdu-excerpts h4 { margin: 4px 0 0; }
+.gongdu-hl { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); }
+.gongdu-hl label, .gongdu-check { display: flex; align-items: flex-start; gap: 8px; line-height: 1.6; cursor: pointer; }
+.gongdu-hl input[type="checkbox"], .gongdu-check input { margin-top: 0.35em; flex: none; }
+.gongdu-thought { font-size: var(--font-ui-small); }
+.gongdu-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
