@@ -1,6 +1,4 @@
 /* 共读打卡 */
-.gongdu-bar.gongdu-warn { color: var(--text-error); }
-.gongdu-bar.gongdu-hint { color: var(--text-accent); }
 /* 左边栏按钮上的小点：有提示（蓝）或出了问题（红） */
 .gongdu-ribbon { position: relative; }
 .gongdu-ribbon.gongdu-attn-hint::after, .gongdu-ribbon.gongdu-attn-warn::after {
@@ -8,22 +6,51 @@
 }
 .gongdu-ribbon.gongdu-attn-warn::after { background: var(--text-error); }
 
-.gongdu-modal .modal-content { display: flex; flex-direction: column; gap: 10px; }
-.gongdu-field { display: flex; flex-direction: column; gap: 6px; }
-.gongdu-field.gongdu-inline { flex-direction: row; align-items: center; gap: 8px; }
-.gongdu-field.gongdu-inline input { width: 6em; }
-.gongdu-field textarea, .gongdu-newtitle { width: 100%; }
-.gongdu-note { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+/* 状态栏上的计时：图标 + 文字。计时中用强调色，暂停用次要色。 */
+.gongdu-bar { display: inline-flex; align-items: center; gap: 4px; }
+.gongdu-bar-icon { display: inline-flex; }
+.gongdu-bar-icon svg { width: var(--icon-xs, 14px); height: var(--icon-xs, 14px); }
+.gongdu-bar.gongdu-running .gongdu-bar-icon { color: var(--interactive-accent); }
+.gongdu-bar.gongdu-paused { color: var(--text-muted); }
+.gongdu-bar.gongdu-hint, .gongdu-bar.gongdu-hint.gongdu-paused { color: var(--text-accent); }
+.gongdu-bar.gongdu-warn, .gongdu-bar.gongdu-warn.gongdu-paused { color: var(--text-error); }
+
+/* 左边栏按钮上的分钟数（Qiaomu Reader 读书时状态栏是藏起来的，这里还看得到） */
+.gongdu-ribbon[data-gongdu-min]::before {
+  content: attr(data-gongdu-min); position: absolute; bottom: -2px; right: -3px; min-width: 12px; padding: 0 2px;
+  font-size: 9px; line-height: 12px; text-align: center; border-radius: 6px;
+  color: var(--text-faint); background: var(--background-secondary);
+}
+.gongdu-ribbon.gongdu-running[data-gongdu-min]::before { color: var(--text-on-accent); background: var(--interactive-accent); }
+
+/* 打卡窗口 */
+.gongdu-modal .modal-content { display: flex; flex-direction: column; gap: var(--size-4-3, 12px); }
+.gongdu-section { display: flex; flex-direction: column; gap: var(--size-4-1, 4px); }
+.gongdu-section + .gongdu-section { padding-top: var(--size-4-3, 12px); border-top: 1px solid var(--background-modifier-border); }
+.gongdu-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.gongdu-label { font-weight: var(--font-semibold, 600); color: var(--text-normal); }
+.gongdu-subhead { font-size: var(--font-ui-smaller); color: var(--text-muted); margin-top: 4px; }
+.gongdu-count { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.gongdu-inline { display: flex; align-items: center; gap: 8px; }
+.gongdu-num { width: 6em; }
+.gongdu-stack { display: flex; flex-direction: column; gap: 6px; }
+.gongdu-section textarea, .gongdu-newtitle, .gongdu-section select { width: 100%; }
+.gongdu-path { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gongdu-note { font-size: var(--font-ui-smaller); color: var(--text-muted); line-height: 1.5; margin: 0; }
 .gongdu-ok { color: var(--text-success); }
 .gongdu-bad { color: var(--text-error); }
+.gongdu-warn-text { color: var(--text-warning, var(--text-accent)); }
+.gongdu-error { font-size: var(--font-ui-smaller); color: var(--text-error); line-height: 1.5; }
+.gongdu-modal input.gongdu-invalid { border-color: var(--text-error); box-shadow: 0 0 0 1px var(--text-error); }
+.gongdu-msg { font-size: var(--font-ui-small); line-height: 1.5; }
 .gongdu-msg:empty { display: none; }
 .gongdu-hidden { display: none !important; }
-.gongdu-excerpts { display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow-y: auto; }
-.gongdu-excerpts h4 { margin: 4px 0 0; }
-.gongdu-hl { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); }
+.gongdu-excerpts { display: flex; flex-direction: column; gap: 8px; max-height: 36vh; overflow-y: auto; }
+.gongdu-hl { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background: var(--background-primary-alt); }
 .gongdu-hl label, .gongdu-check { display: flex; align-items: flex-start; gap: 8px; line-height: 1.6; cursor: pointer; }
 .gongdu-hl input[type="checkbox"], .gongdu-check input { margin-top: 0.35em; flex: none; }
 .gongdu-thought { font-size: var(--font-ui-small); }
+.gongdu-hl .gongdu-drop { align-self: flex-end; font-size: var(--font-ui-smaller); color: var(--text-muted); padding: 2px 6px; height: auto; width: auto; }
+.gongdu-link { background: none; border: none; box-shadow: none; padding: 0; height: auto; font-size: var(--font-ui-smaller); color: var(--text-accent); cursor: pointer; }
+.gongdu-link:hover { text-decoration: underline; background: none; }
 .gongdu-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-.gongdu-hl .gongdu-drop { align-self: flex-end; font-size: var(--font-ui-smaller); padding: 2px 8px; height: auto; }
-.gongdu-more { align-self: flex-start; }

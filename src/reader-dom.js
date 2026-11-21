@@ -33,17 +33,37 @@ function scopesIn(root, out = [], seen = new Set()) {
 }
 
 /**
- * 在 root 里每个能进去的地方挂上监听：有点击、按键、滚轮、触摸、滚动、选字，就调 onActive。
- * 书翻章节时 iframe 会换掉，所以要定时再调一次；挂过的不会重复挂（watched 是 WeakSet）。
+ * 一个可以撤下的监听器：watch(root) 挂上（挂过的不重复挂），detach() 把挂过的全部撤下（插件关掉时用）。
+ * 挂过的地方用 WeakRef 记着：书翻章节时旧的 iframe 没了，不会因为这里记着而留在内存里。
  */
-function watchActivity(root, onActive, watched) {
-  for (const scope of scopesIn(root)) {
-    if (watched.has(scope)) continue;
-    watched.add(scope);
-    for (const ev of ACTIVITY_EVENTS) {
-      try { scope.addEventListener(ev, onActive, { capture: true, passive: true }); } catch { /* 有的地方挂不上，跳过 */ }
-    }
-  }
+function createWatcher(onActive) {
+  const watched = new WeakSet();
+  let refs = [];
+  const opts = { capture: true, passive: true };
+  return {
+    watch(root) {
+      for (const scope of scopesIn(root)) {
+        if (watched.has(scope)) continue;
+        watched.add(scope);
+        for (const ev of ACTIVITY_EVENTS) {
+          try { scope.addEventListener(ev, onActive, opts); } catch { /* 有的地方挂不上，跳过 */ }
+        }
+        refs.push(typeof WeakRef === 'function' ? new WeakRef(scope) : { deref: () => scope });
+      }
+      refs = refs.filter(r => r.deref()); // 已经没了的不再记
+    },
+    detach() {
+      for (const r of refs) {
+        const scope = r.deref();
+        if (!scope) continue;
+        for (const ev of ACTIVITY_EVENTS) {
+          try { scope.removeEventListener(ev, onActive, opts); } catch { /* 跳过 */ }
+        }
+      }
+      refs = [];
+    },
+    get size() { return refs.filter(r => r.deref()).length; },
+  };
 }
 
 /** 阅读页里现在选中的文字（先看外面的 document，再看各层 iframe）。没有就是空字符串。 */
@@ -63,4 +83,4 @@ function selectedText(root) {
   return '';
 }
 
-module.exports = { scopesIn, watchActivity, selectedText, ACTIVITY_EVENTS };
+module.exports = { scopesIn, createWatcher, selectedText, ACTIVITY_EVENTS };
