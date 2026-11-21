@@ -43,7 +43,7 @@ for (const s of steps) {
   if (s[0] === 'wait') { await sleep(s[1]); continue; }
   if (s[0] === 'move') { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: s[1], y: s[2] }); continue; }
   if (s[0] === 'click') { for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: s[1], y: s[2], button: 'left', clickCount: 1 }); continue; }
-  if (s[0] === 'key') { const code = s[1]; const vk = { ArrowRight: 39, ArrowLeft: 37, ArrowDown: 40 }[code] || 0; for (const type of ['rawKeyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: code, code, windowsVirtualKeyCode: vk }); continue; }
+  if (s[0] === 'key') { const code = s[1]; const vk = { ArrowRight: 39, ArrowLeft: 37, ArrowDown: 40, Escape: 27, Enter: 13 }[code] || 0; for (const type of ['rawKeyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: code, code, windowsVirtualKeyCode: vk }); continue; }
   if (s[0] === 'shot') { const r = await send('Page.captureScreenshot', { format: 'png' }); const f = path.join(S, s[1] + '.png'); fs.writeFileSync(f, Buffer.from(r.data, 'base64')); console.log('shot>', f); continue; }
   if (s[0] === 'server') { const r = await (await fetch(s[1], { headers: { Authorization: 'Bearer ' + s[2] } })).json(); console.log('server>', JSON.stringify(s[3] ? eval(s[3])(r) : r)); continue; }
   console.log((s[2] || 'eval') + '>', JSON.stringify(await ev(s[1])));

@@ -16,14 +16,26 @@ const KEEP_DAYS = 3;
  * last：上次检查的时间（毫秒），第一次是 0。返回这次加了几秒。
  */
 function tick(log, last, ctx) {
-  if (!last || !ctx.book || !ctx.focused || ctx.paused) return 0;
-  if (!(ctx.now - ctx.lastActive <= IDLE_MS)) return 0;
+  if (!last || stateOf(ctx).state !== 'running') return 0;
   const ms = Math.min(Math.max(0, ctx.now - last), MAX_STEP_MS);
   const sec = Math.round(ms / 1000);
   if (!sec) return 0;
   const today = log[ctx.day] || (log[ctx.day] = {});
   today[ctx.book] = (today[ctx.book] || 0) + sec;
   return sec;
+}
+
+/**
+ * 现在在不在计时，不在的话为什么。ctx 和 tick 的一样。
+ * 返回 { state: 'running' | 'paused', reason: '' | 'no-book' | 'checkin' | 'unfocused' | 'idle' }。
+ * 原因按这个顺序判断：没开书 → 打卡窗口开着 → Obsidian 不在最前面 → 3 分钟没动。
+ */
+function stateOf(ctx) {
+  if (!ctx.book) return { state: 'paused', reason: 'no-book' };
+  if (ctx.paused) return { state: 'paused', reason: 'checkin' };
+  if (!ctx.focused) return { state: 'paused', reason: 'unfocused' };
+  if (!(ctx.now - ctx.lastActive <= IDLE_MS)) return { state: 'paused', reason: 'idle' };
+  return { state: 'running', reason: '' };
 }
 
 /** 某天某本书记了几秒；不给书就是那天所有书一共。 */
@@ -60,10 +72,29 @@ function prefillMinutes({ siteMin = 0, clockSec = 0, committedSec = 0 }) {
   return { value: Math.min(1440, (siteMin || 0) + fresh), fresh };
 }
 
-/** 打卡成功后记下这次算进去的插件秒数（按天、按书）。 */
+/**
+ * 打卡交上去以后，插件的时间有多少算“已经交过”（返回新的 committedSec）。
+ * 规则：交上去的分钟数先算网站上原来记的（siteMin），多出来的部分才是插件的时间。
+ * - 多出来的 ≥ 当时没交过的插件分钟（freshMin）：插件的时间全部算交过；
+ * - 少一些（学生自己往少里改了）：只把多出来的这几分钟算交过，剩下的插件时间下次打卡还会加上；
+ * - 没有多出来（≤ siteMin）：插件的时间一点也不算交过。
+ * 永远不超过插件实际记的 clockSec，也不往回减。
+ */
+function committedAfter({ siteMin = 0, submitted = 0, clockSec = 0, committedSec = 0 }) {
+  const freshSec = Math.max(0, clockSec - committedSec);
+  const freshMin = Math.round(freshSec / 60);
+  const used = (submitted || 0) - (siteMin || 0);
+  let add;
+  if (used <= 0) add = 0;
+  else if (used >= freshMin) add = freshSec;
+  else add = used * 60;
+  return Math.max(committedSec, Math.min(clockSec, committedSec + add));
+}
+
+/** 记下这本书现在“已经交过”的插件秒数（只往大里记）。 */
 function commit(committed, day, book, sec) {
   const today = committed[day] || (committed[day] = {});
   today[book] = Math.max(today[book] || 0, sec || 0);
 }
 
-module.exports = { tick, secondsOf, prune, rename, prefillMinutes, commit, IDLE_MS, TICK_MS, MAX_STEP_MS };
+module.exports = { tick, stateOf, secondsOf, prune, rename, prefillMinutes, committedAfter, commit, IDLE_MS, TICK_MS, MAX_STEP_MS };
