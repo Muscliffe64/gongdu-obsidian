@@ -1,7 +1,7 @@
 'use strict';
 // 读书打卡窗口：书、今天读了几分钟、读到哪里、读书时摘的句子和今天的高亮（每句可以加想法）、换封面（可选），一屏打完。
 // 窗口开着的时候自动计时停下（写想法、粘贴不算读书时间）。
-const { Modal, TFile } = require('obsidian');
+const { Modal, TFile, Platform } = require('obsidian');
 const Q = require('./qiaomu');
 const { matchBook } = require('./match');
 const { readQiaomu } = require('./obsidian-io');
@@ -85,8 +85,17 @@ class CheckinModal extends Modal {
     if (note) el.createEl('p', { cls: note.kind === 'warn' ? 'gongdu-note gongdu-warn-text' : 'gongdu-note', text: note.text });
     if (s.checked) el.createEl('p', { cls: 'gongdu-note gongdu-ok', text: `今天已经打过卡了（${s.minutes} 分钟）。再交一次：同一本书会更新分钟和进度，换一本书会另记一条。` });
 
-    const section = (label, forId) => {
-      const box = el.createDiv({ cls: 'gongdu-section' });
+    // 最上面一行摘要：《书》 · N 分钟 · 读到 P%  改。书、分钟、进度默认收起来，拿不准时才展开。
+    const summary = el.createDiv({ cls: 'gongdu-summary' });
+    const summaryText = summary.createSpan({ cls: 'gongdu-summary-text' });
+    const editBtn = summary.createEl('button', { cls: 'gongdu-link', text: '改' });
+    const reasonsEl = el.createDiv({ cls: 'gongdu-note gongdu-warn-text gongdu-hidden' });
+    const details = el.createDiv({ cls: 'gongdu-details gongdu-hidden' });
+    const showDetails = () => { details.removeClass('gongdu-hidden'); editBtn.addClass('gongdu-hidden'); };
+    editBtn.addEventListener('click', () => { showDetails(); minutes.focus(); });
+
+    const section = (label, forId, parent = el) => {
+      const box = parent.createDiv({ cls: 'gongdu-section' });
       const head = box.createDiv({ cls: 'gongdu-section-head' });
       head.createEl('label', { cls: 'gongdu-label', text: label, attr: forId ? { for: forId } : {} });
       return { box, head };
@@ -102,7 +111,7 @@ class CheckinModal extends Modal {
     };
 
     // 1. 书
-    const book = section('书', 'gongdu-book').box;
+    const book = section('书', 'gongdu-book', details).box;
     const select = book.createEl('select', { cls: 'dropdown', attr: { id: 'gongdu-book' } });
     for (const b of this.books) select.createEl('option', { value: String(b.id), text: `《${b.title}》${b.status === 'paused' ? '（搁置）' : ''}` });
     const newTitle = this.match.book ? '' : this.match.title;
@@ -122,7 +131,7 @@ class CheckinModal extends Modal {
     }
 
     // 2. 今天读了多久
-    const minSec = section('今天读了多久', 'gongdu-min');
+    const minSec = section('今天读了多久', 'gongdu-min', details);
     const minRow = minSec.box.createDiv({ cls: 'gongdu-inline' });
     const minutes = minRow.createEl('input', { type: 'text', cls: 'gongdu-num', attr: { id: 'gongdu-min', inputmode: 'numeric', placeholder: '比如 30', autocomplete: 'off', 'aria-describedby': 'gongdu-min-note' } });
     minRow.createSpan({ text: '分钟' });
@@ -162,7 +171,7 @@ class CheckinModal extends Modal {
     fillMinutes();
 
     // 3. 进度
-    const pctSec = section('读到哪里', 'gongdu-pct');
+    const pctSec = section('读到哪里', 'gongdu-pct', details);
     const pctRow = pctSec.box.createDiv({ cls: 'gongdu-inline' });
     const pct = pctRow.createEl('input', { type: 'text', cls: 'gongdu-num', attr: { id: 'gongdu-pct', inputmode: 'decimal', placeholder: '比如 45', autocomplete: 'off' } });
     pctRow.createSpan({ text: '%' });
@@ -170,6 +179,23 @@ class CheckinModal extends Modal {
     if (this.percent != null) pctSec.box.createDiv({ cls: 'gongdu-note', text: '阅读器里这本书的进度。可以改。' });
     const pctErr = fieldError(pctSec.box);
     pct.addEventListener('input', () => clearError(pct, pctErr));
+
+    const bookTitle = () => {
+      if (select.value === NEW) return titleInput.value.trim();
+      const b = this.books.find(x => String(x.id) === select.value);
+      return b ? b.title : '';
+    };
+    const updateSummary = () => summaryText.setText(L.summaryText({ title: bookTitle(), minutes: minutes.value, percent: pct.value, isNew: select.value === NEW }));
+    for (const input of [minutes, pct, titleInput]) input.addEventListener('input', updateSummary);
+    select.addEventListener('change', () => updateSummary());
+    updateSummary();
+    // 有拿不准的（没找到书、没计到时间、没有进度……）就一打开就展开，并说为什么
+    const reasons = L.detailReasons({ hasFile: !!this.file, minutes: minutes.value, percent: pct.value, source: plan.source, isNew: select.value === NEW, newTitle: titleInput.value });
+    if (reasons.length) {
+      showDetails();
+      reasonsEl.setText(reasons.join('；') + '。');
+      reasonsEl.removeClass('gongdu-hidden');
+    }
 
     // 4. 摘句：读书时摘的 + 今天的高亮
     const exSec = section('摘句');
@@ -188,10 +214,16 @@ class CheckinModal extends Modal {
       box.addEventListener('change', () => { thought.toggleClass('gongdu-hidden', !box.checked); countNote(); });
       return { row, box, thought };
     };
-    if (this.clips.length) {
-      exBox.createDiv({ cls: 'gongdu-subhead', text: `读书时摘的 · ${this.clips.length} 句` });
-      for (const c of this.clips) {
-        const { row, box, thought } = listRow(c.text, true);
+    // 读书时摘的、今天的高亮，都默认勾上（读书时画了高亮就等于摘下来了），不想交的取消勾选
+    let lastKind = null;
+    for (const it of L.excerptItems({ clips: this.clips, highlights: this.highlights })) {
+      if (it.kind !== lastKind) {
+        exBox.createDiv({ cls: 'gongdu-subhead', text: it.kind === 'clip' ? `读书时摘的 · ${this.clips.length} 句` : `今天在阅读器里画的高亮 · ${this.highlights.length} 句` });
+        lastKind = it.kind;
+      }
+      const { row, box, thought } = listRow(it.text, it.checked);
+      if (it.kind === 'clip') {
+        const c = it.clip;
         const drop = row.createEl('button', { cls: 'gongdu-drop clickable-icon', text: '不要这句' });
         drop.addEventListener('click', async () => {
           drop.disabled = true;
@@ -201,14 +233,7 @@ class CheckinModal extends Modal {
           countNote();
         });
         clipped.push({ c, box, thought });
-      }
-    }
-    if (this.highlights.length) {
-      exBox.createDiv({ cls: 'gongdu-subhead', text: `今天的高亮 · ${this.highlights.length} 句` });
-      for (const hl of this.highlights) {
-        const { box, thought } = listRow(hl.text, false);
-        picked.push({ hl, box, thought });
-      }
+      } else picked.push({ hl: it.hl, box, thought });
     }
     if (!this.clips.length && !this.highlights.length) {
       exBox.createDiv({ cls: 'gongdu-note', text: this.file ? '今天还没摘句子。读书时在书里选中一句，点左边栏的共读按钮，就会摘到这里；阅读器里的高亮也会列在这里。也可以在下面自己写一句。' : '没找到阅读器里正在读的书。可以在下面自己写一句。' });
@@ -224,7 +249,7 @@ class CheckinModal extends Modal {
     if (this.clips.length || this.highlights.length) {
       // 有摘的或高亮时先收起来，要用再展开
       ownBody.addClass('gongdu-hidden');
-      const more = ownSec.head.createEl('button', { cls: 'gongdu-link', text: '展开' });
+      const more = ownSec.head.createEl('button', { cls: 'gongdu-link', text: '写一句' });
       more.addEventListener('click', () => { ownBody.removeClass('gongdu-hidden'); more.remove(); ownText.focus(); });
     }
     ownText.addEventListener('input', () => { clearError(null, exErr); countNote(); });
@@ -256,8 +281,27 @@ class CheckinModal extends Modal {
     // 7. 按钮。结果和网站返回的错误写在按钮上面；填的不对，错误写在那一栏下面
     const msg = el.createDiv({ cls: 'gongdu-msg', attr: { role: 'status' } });
     const btns = el.createDiv({ cls: 'modal-button-container' });
+    if (!Platform.isMobile) btns.createSpan({ cls: 'gongdu-kbd', text: Platform.isMacOS ? '⌘↵ 打卡' : 'Ctrl+Enter 打卡' });
     const submit = btns.createEl('button', { cls: 'mod-cta', text: '打卡' });
     btns.createEl('button', { text: '取消' }).addEventListener('click', () => this.close());
+    // Cmd/Ctrl+Enter 直接打卡（在想法框里写完就能交）
+    this.scope.register(['Mod'], 'Enter', () => { submit.click(); return false; });
+
+    // 光标先放在要动手的地方：有拿不准的就放在那一栏；不然放在第一句的想法框里
+    window.setTimeout(() => {
+      let target = null;
+      if (reasons.length) {
+        target = select.value === NEW && !titleInput.value.trim() ? titleInput
+          : (!minutes.value.trim() || plan.source !== 'clock') ? minutes
+          : !pct.value.trim() ? pct : select;
+      }
+      else {
+        const first = [...clipped, ...picked].find(x => x.box.checked);
+        target = first ? first.thought : null;
+        if (!target && ownBody.hasClass('gongdu-hidden') === false) target = ownText;
+      }
+      if (target) target.focus();
+    }, 50);
 
     let done = false;
     submit.addEventListener('click', async () => {
@@ -265,10 +309,10 @@ class CheckinModal extends Modal {
       msg.setText(''); msg.className = 'gongdu-msg';
       const bad = text => { msg.setText(text); msg.addClass('gongdu-bad'); };
       const mc = L.checkMinutes(minutes.value);
-      if (!mc.ok) return showError(minutes, minErr, mc.message);
+      if (!mc.ok) { showDetails(); return showError(minutes, minErr, mc.message); }
       const pc = L.checkPercent(pct.value);
-      if (!pc.ok) return showError(pct, pctErr, pc.message);
-      if (select.value === NEW && !titleInput.value.trim()) return showError(titleInput, titleErr, '请填书名，比如 乡土中国。');
+      if (!pc.ok) { showDetails(); return showError(pct, pctErr, pc.message); }
+      if (select.value === NEW && !titleInput.value.trim()) { showDetails(); return showError(titleInput, titleErr, '请填书名，比如 乡土中国。'); }
       // 一次最多交 20 句（网站只收前 20 句）：自己写的放最前面（关了窗口就没了），再是摘的，再是高亮。
       const all = [];
       if (ownText.value.trim()) all.push({ kind: 'own', ex: { text: ownText.value.trim(), thought: ownThought.value.trim() || undefined } });
@@ -302,7 +346,9 @@ class CheckinModal extends Modal {
         await p.dropClips(savedIds);
         const left = p.data.clips.filter(c => c.day === this.clockDay && (!this.file || c.book === this.file.path)).length;
         if (left) lines.push(`还有 ${left} 句摘的没交上去，留在这里，下次打卡时会列出来。`);
-        if (held.length && held.some(x => x.kind !== 'clip')) lines.push(`超过 ${Clips.MAX_SEND} 句的高亮这次没交，可以再打一次卡勾上。`);
+        const heldHighlights = held.length > 0 && held.some(x => x.kind !== 'clip');
+        if (heldHighlights) lines.push(`超过 ${Clips.MAX_SEND} 句的高亮这次没交，可以再打一次卡勾上。`);
+        let coverProblem = false;
         // 记下这次算进去的插件时间（只在选的正是这个文件的书时；往少里改了就只算进去的那部分），下次不再重复加
         if (this.file && ownsClock && this.clockSeconds) {
           const next = Clock.committedAfter({ siteMin: siteMinBefore, submitted: mc.value, clockSec: this.clockSeconds, committedSec: this.committedSeconds });
@@ -315,18 +361,22 @@ class CheckinModal extends Modal {
           if (replaceBox.checked) {
             try {
               const r = await p.sync.replace(this.file, bookId);
+              if (!r) coverProblem = true;
               lines.push(!r ? '阅读器里没找到这本书的封面，封面没换。' : r.status === 'same' ? '网站上已经是这张封面了。' : '封面换好了。');
-            } catch (e) { lines.push(`封面没换：${e.message}`); }
+            } catch (e) { coverProblem = true; lines.push(`封面没换：${e.message}`); }
           } else {
             p.sync.sync(this.file, { force: true }).catch(() => {});
           }
         }
-        if (out.new_achievements && out.new_achievements.length) lines.push(`新成就：${out.new_achievements.map(a => a.name || a.title || a).join('、')}`);
-        msg.setText(lines.join(' ')); msg.addClass('gongdu-ok');
+        if (out.new_achievements && out.new_achievements.length) lines.push(`新成就：${out.new_achievements.map(a => a.name || a.title || a).join('、')}。`);
+        // 没有要学生看一眼的事，就过一会儿自己关掉
+        const auto = L.canAutoClose({ left, heldHighlights, coverProblem });
+        msg.setText(lines.join(' ') + (auto ? ' 窗口马上会自己关上。' : '')); msg.addClass('gongdu-ok');
         submit.setText('关闭');
         submit.disabled = false;
         done = true;
         p.refreshBar(true);
+        if (auto) window.setTimeout(() => this.close(), 3000);
       } catch (e) {
         submit.disabled = false;
         bad(e.message || '出错了');
