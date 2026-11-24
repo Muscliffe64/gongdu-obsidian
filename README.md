@@ -15,9 +15,9 @@
 
 - **书**：自动对到共读书架上的书（按书里写的书名、文件名，以及以前打卡时确认过的）。书架上没有就是「加一本：《…》」，打卡时网站会加上。
 - **今天读了几分钟**：插件今天自动给这本书记的分钟（网站上这本书今天已经交过更多的，就填那个，不往少里改）。插件没记到时，退回用 Qiaomu Reader 自己的计时（要在阅读器菜单里手动开始）：它记的是所有书一起的，今天别的书已经记过的会减掉，这本书已经记过的会保留（网站上同一本书再交是覆盖）。
-- **读书时摘的**：读书时摘下的句子，默认勾上，每句可以加想法，也可以“不要这句”。打卡交上去以后就从本机去掉；不是今天的也去掉。
+- **读书时摘的**：读书时摘下的句子，默认勾上，每句可以加想法，也可以“不要这句”。摘的时候顺手记下第几章第几节（从书的目录读），电子书自带纸书页码表的还会带上页数；两格都可以改。打卡交上去以后就从本机去掉；不是今天的也去掉。
 - **读到百分之几**：阅读器里这本书的进度。
-- **今天的高亮**：勾上想摘的句子，每句可以加想法。有摘的或高亮时，「自己再写一句」先收起来。今天还没有摘录时至少要有一句。
+- **今天的高亮**：勾上想摘的句子，每句可以加想法。书开着时按高亮记的位置填上第几章第几节。有摘的或高亮时，「自己再写一句」先收起来。今天还没有摘录时至少要有一句。
 - **换成阅读器里的封面**：只有网站上这本书已经有封面图（或者去掉过）、而阅读器里找得到封面时才出现，默认不勾。
 
 ## 自动计时
@@ -72,7 +72,8 @@ Qiaomu Reader 自己的计时要在阅读器菜单里手动点开始，大多数
 |---|---|
 | 今天读了多久 | Qiaomu Reader 插件数据 `data.json` 的 `settings.readingLog["YYYY-MM-DD"]`（秒，所有书一起） |
 | 读到哪里 | `<数据文件夹>/reading-progress.json`：`{ 书的路径: { pct, percent, lastRead } }` |
-| 高亮 | `<数据文件夹>/reading-highlights.json`：`{ 书的路径: [ { text, created } ] }` |
+| 高亮 | `<数据文件夹>/reading-highlights.json`：`{ 书的路径: [ { text, created, cfi } ] }` |
+| 读到哪一章 | 阅读页里的 `<…foliate-view>` 元素：`book.toc`（目录）、`book.resolveHref`、`lastLocation`（`section.current`、`tocItem`、`pageItem`）、`resolveCFI`。只读 |
 | 封面缓存 | `.obsidian/plugins/qiaomu-reader/thumbnails-v3/<sha256(JSON.stringify([路径, mtime, size]))>.jpg`，书在 Qiaomu Reader 书库里显示过才有 |
 | 书的笔记 | `settings.bookNoteLinks[书的路径]`，笔记属性 `cover:`（图片链接或网址） |
 
@@ -104,6 +105,7 @@ npm test                   # node:test；cover-sync 的测试会起一个本机�
 | `src/timer-view.js` | 状态栏和左边栏按钮上的计时显示 |
 | `src/checkin-logic.js` | 打卡窗口里分钟先填多少、检查填的数、这次带上几句 |
 | `src/clips.js` | 读书时摘下的句子：去重、按书按天、交上去以后去掉 |
+| `src/place.js` | 摘句在第几章第几节、第几页：从书的目录和 foliate 的 lastLocation 读，高亮按 cfi 找 |
 | `src/reader-dom.js` | 进到阅读页里：挂监听看有没有在读（插件关掉时撤下），读选中的文字 |
 | `src/connect.js` | 用连接码换令牌，检查网站地址（只收 https 和本机） |
 | `src/checkin-modal.js` | 打卡窗口 |

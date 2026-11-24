@@ -14,6 +14,7 @@ const { CheckinModal } = require('./checkin-modal');
 const C = require('./connect');
 const Clock = require('./clock');
 const Clips = require('./clips');
+const Place = require('./place');
 const R = require('./reader-dom');
 const { barView } = require('./timer-view');
 const { titlesFromPath } = require('./match');
@@ -225,18 +226,28 @@ class GongduPlugin extends Plugin {
     if (!text) { if (loud) new Notice('先在书里选中一句话，再摘。'); return null; }
     const day = Q.dayOf(Date.now());
     this.data.clips = Clips.pruneDays(this.data.clips, day);
-    const out = Clips.add(this.data.clips, { text, book: r.file.path, day, now: Date.now() });
+    const out = Clips.add(this.data.clips, { text, book: r.file.path, day, now: Date.now(), ...this.placeNow(r) });
     if (!out) return null;
     this.saveSoon();
     if (loud) this.clipNotice(out, r.file.path, day);
     return out;
   }
 
+  /**
+   * 阅读页里现在读到第几章第几节（还有电子书自带的纸书页码）。cfi：高亮记的位置，按它找章节。
+   * 拿不到就是 { location: '', page: '' }。
+   */
+  placeNow(r = this.readingLeaf(), cfi = '') {
+    const el = r && r.leaf.view && r.leaf.view.containerEl;
+    return Place.placeOf(el ? R.foliateView(el) : null, cfi);
+  }
+
   /** 摘好以后的一句短提示（几秒就消失，不是弹窗）。 */
   clipNotice(out, path, day) {
     const n = Clips.forBook(this.data.clips, day, path).length;
     const t = out.clip.text;
-    new Notice(out.added ? `摘下了：「${t.slice(0, 24)}${t.length > 24 ? '…' : ''}」。今天这本书摘了 ${n} 句，打卡时会带上。` : '这句已经摘过了。', 3500);
+    const where = Place.placeLabel(out.clip);
+    new Notice(out.added ? `摘下了：「${t.slice(0, 24)}${t.length > 24 ? '…' : ''}」${where ? `（${where}）` : ''}。今天这本书摘了 ${n} 句，打卡时会带上。` : '这句已经摘过了。', 3500);
   }
 
   /** 左边栏共读按钮：选中了新的一句就摘下来；否则打开打卡窗口。 */
