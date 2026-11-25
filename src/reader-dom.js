@@ -83,4 +83,17 @@ function selectedText(root) {
   return '';
 }
 
-module.exports = { scopesIn, createWatcher, selectedText, ACTIVITY_EVENTS };
+/** 阅读页里显示书的 foliate-view 元素（身上有 book 和 renderer）。找不到返回 null。 */
+function foliateView(root) {
+  for (const scope of scopesIn(root)) {
+    if (scope.nodeType === 9) continue; // 书里面的 document 不用看
+    let all = [];
+    try { all = scope.querySelectorAll ? scope.querySelectorAll('*') : []; } catch { all = []; }
+    for (const el of all) {
+      if (el.book && el.renderer && typeof el.renderer.getContents === 'function') return el;
+    }
+  }
+  return null;
+}
+
+module.exports = { scopesIn, createWatcher, selectedText, foliateView, ACTIVITY_EVENTS };

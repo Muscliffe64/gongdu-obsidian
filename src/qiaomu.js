@@ -62,7 +62,7 @@ function highlightsOn(highlights, path, day) {
     const text = String((hl && hl.text) || '').replace(/\s+/g, ' ').trim();
     if (!text || !Number.isFinite(hl.created) || dayOf(hl.created) !== day || seen.has(text)) continue;
     seen.add(text);
-    out.push({ id: hl.id || null, text, created: hl.created });
+    out.push({ id: hl.id || null, text, created: hl.created, cfi: typeof hl.cfi === 'string' ? hl.cfi : '' });
   }
   return out.sort((a, b) => a.created - b.created);
 }

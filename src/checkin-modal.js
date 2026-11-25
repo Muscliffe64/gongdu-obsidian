@@ -11,6 +11,27 @@ const L = require('./checkin-logic');
 
 const NEW = 'new';
 
+/**
+ * 一句摘录的出处：第几章第几节、纸书页数，两格。先填好从书的目录读到的，可以改，也可以清空。
+ * value() 只给填了的：{ location?, page? }。
+ */
+function placeInputs(parent, place) {
+  const row = parent.createDiv({ cls: 'gongdu-place' });
+  const loc = row.createEl('input', { type: 'text', cls: 'gongdu-place-loc', attr: { placeholder: '第几章第几节（可以不写）', maxlength: '60', 'aria-label': '第几章第几节' } });
+  const page = row.createEl('input', { type: 'text', cls: 'gongdu-place-page', attr: { placeholder: '页数', inputmode: 'numeric', maxlength: '20', 'aria-label': '纸质书页数' } });
+  loc.value = (place && place.location) || '';
+  page.value = (place && place.page) || '';
+  return {
+    row,
+    value() {
+      const out = {};
+      if (loc.value.trim()) out.location = loc.value.trim();
+      if (page.value.trim()) out.page = page.value.trim();
+      return out;
+    },
+  };
+}
+
 class CheckinModal extends Modal {
   constructor(app, plugin) {
     super(app);
@@ -64,6 +85,9 @@ class CheckinModal extends Modal {
     // 阅读器里这个文件对应的书：插件计的时间只算给它（下拉框选了别的书就不算）
     this.fileKey = this.file ? (this.match.book ? String(this.match.book.id) : this.match.title ? NEW : null) : null;
     this.highlights = this.file ? Q.highlightsOn(this.qiaomu.highlights, this.file.path, day) : [];
+    // 高亮记着它在书里的位置（cfi），书开着的话按它找第几章第几节
+    this.highlights = this.highlights.map(hl => ({ ...hl, ...(hl.cfi ? p.placeNow(undefined, hl.cfi) : { location: '', page: '' }) }));
+    this.here = p.placeNow(); // 自己写一句时先填现在读到的章节
     this.seconds = Q.secondsOn(this.qiaomu.settings, day);
     // 插件自动记的：用本机的日期（和计时时一样）
     const today = Q.dayOf(Date.now());
@@ -203,16 +227,18 @@ class CheckinModal extends Modal {
     const exBox = exSec.box.createDiv({ cls: 'gongdu-excerpts' });
     const picked = [];
     const clipped = [];
-    const listRow = (text, checked) => {
+    const listRow = (text, checked, place) => {
       const row = exBox.createDiv({ cls: 'gongdu-hl' });
       const label = row.createEl('label');
       const box = label.createEl('input', { type: 'checkbox' });
       box.checked = checked;
       label.createSpan({ text });
+      const where = placeInputs(row, place);
       const thought = row.createEl('textarea', { cls: 'gongdu-thought', attr: { rows: '2', placeholder: '想法（可以不写）', maxlength: '500' } });
-      thought.toggleClass('gongdu-hidden', !checked);
-      box.addEventListener('change', () => { thought.toggleClass('gongdu-hidden', !box.checked); countNote(); });
-      return { row, box, thought };
+      const show = () => { thought.toggleClass('gongdu-hidden', !box.checked); where.row.toggleClass('gongdu-hidden', !box.checked); };
+      show();
+      box.addEventListener('change', () => { show(); countNote(); });
+      return { row, box, thought, where };
     };
     // 读书时摘的、今天的高亮，都默认勾上（读书时画了高亮就等于摘下来了），不想交的取消勾选
     let lastKind = null;
@@ -221,7 +247,7 @@ class CheckinModal extends Modal {
         exBox.createDiv({ cls: 'gongdu-subhead', text: it.kind === 'clip' ? `读书时摘的 · ${this.clips.length} 句` : `今天在阅读器里画的高亮 · ${this.highlights.length} 句` });
         lastKind = it.kind;
       }
-      const { row, box, thought } = listRow(it.text, it.checked);
+      const { row, box, thought, where } = listRow(it.text, it.checked, it.kind === 'clip' ? it.clip : it.hl);
       if (it.kind === 'clip') {
         const c = it.clip;
         const drop = row.createEl('button', { cls: 'gongdu-drop clickable-icon', text: '不要这句' });
@@ -232,8 +258,8 @@ class CheckinModal extends Modal {
           Clips.dropFrom(clipped, x => x.c === c);
           countNote();
         });
-        clipped.push({ c, box, thought });
-      } else picked.push({ hl: it.hl, box, thought });
+        clipped.push({ c, box, thought, where });
+      } else picked.push({ hl: it.hl, box, thought, where });
     }
     if (!this.clips.length && !this.highlights.length) {
       exBox.createDiv({ cls: 'gongdu-note', text: this.file ? '今天还没摘句子。读书时在书里选中一句，点左边栏的共读按钮，就会摘到这里；阅读器里的高亮也会列在这里。也可以在下面自己写一句。' : '没找到阅读器里正在读的书。可以在下面自己写一句。' });
@@ -245,6 +271,7 @@ class CheckinModal extends Modal {
     const ownSec = section(s.excerpts && s.excerpts.length ? `自己写一句（今天已经摘了 ${s.excerpts.length} 句，可以不写）` : '自己写一句', 'gongdu-own');
     const ownBody = ownSec.box.createDiv({ cls: 'gongdu-stack' });
     const ownText = ownBody.createEl('textarea', { attr: { id: 'gongdu-own', rows: '2', placeholder: '书里的一句话', maxlength: '1000' } });
+    const ownWhere = placeInputs(ownBody, this.here);
     const ownThought = ownBody.createEl('textarea', { cls: 'gongdu-thought', attr: { rows: '2', placeholder: '想法（可以不写）', maxlength: '500' } });
     if (this.clips.length || this.highlights.length) {
       // 有摘的或高亮时先收起来，要用再展开
@@ -315,9 +342,9 @@ class CheckinModal extends Modal {
       if (select.value === NEW && !titleInput.value.trim()) { showDetails(); return showError(titleInput, titleErr, '请填书名，比如 乡土中国。'); }
       // 一次最多交 20 句（网站只收前 20 句）：自己写的放最前面（关了窗口就没了），再是摘的，再是高亮。
       const all = [];
-      if (ownText.value.trim()) all.push({ kind: 'own', ex: { text: ownText.value.trim(), thought: ownThought.value.trim() || undefined } });
-      for (const x of clipped.filter(y => y.box.checked)) all.push({ kind: 'clip', clip: x.c, ex: { text: x.c.text, thought: x.thought.value.trim() || undefined } });
-      for (const x of picked.filter(y => y.box.checked)) all.push({ kind: 'hl', ex: { text: x.hl.text, thought: x.thought.value.trim() || undefined } });
+      if (ownText.value.trim()) all.push({ kind: 'own', ex: { text: ownText.value.trim(), thought: ownThought.value.trim() || undefined, ...ownWhere.value() } });
+      for (const x of clipped.filter(y => y.box.checked)) all.push({ kind: 'clip', clip: x.c, ex: { text: x.c.text, thought: x.thought.value.trim() || undefined, ...x.where.value() } });
+      for (const x of picked.filter(y => y.box.checked)) all.push({ kind: 'hl', ex: { text: x.hl.text, thought: x.thought.value.trim() || undefined, ...x.where.value() } });
       const { send, held } = Clips.planSend(all);
       const excerpts = send.map(x => x.ex);
       const sentClips = send.filter(x => x.kind === 'clip').map(x => x.clip);

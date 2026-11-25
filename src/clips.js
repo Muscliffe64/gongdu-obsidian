@@ -1,7 +1,7 @@
 'use strict';
 // 读书时摘下的句子：在阅读器里选中一句，点左边栏的共读按钮（或者用「摘下选中的句子」命令），就先存在这里，
 // 打卡窗口里默认勾上。只存在本机插件数据里，打卡交上去以后去掉；不是今天的也去掉。
-// 每条：{ id, text, book（文件路径）, day, at }
+// 每条：{ id, text, book（文件路径）, day, at, location（第几章第几节）, page（纸书页数） }；出处拿不到就是空字符串
 
 const MAX_LEN = 1000;
 const MAX_CLIPS = 50;
@@ -17,12 +17,12 @@ function cleanText(raw) {
  * 摘一句。已经摘过同一句（同一本书、同一天）就不重复。
  * 返回 { clip, added }；文字是空的返回 null。
  */
-function add(list, { text, book, day, now }) {
+function add(list, { text, book, day, now, location = '', page = '' }) {
   const t = cleanText(text);
   if (t.length < MIN_LEN) return null;
   const same = list.find(c => c.day === day && c.book === book && c.text === t);
   if (same) return { clip: same, added: false };
-  const clip = { id: `${now}-${Math.random().toString(36).slice(2, 7)}`, text: t, book: book || '', day, at: now };
+  const clip = { id: `${now}-${Math.random().toString(36).slice(2, 7)}`, text: t, book: book || '', day, at: now, location: location || '', page: page || '' };
   list.push(clip);
   while (list.length > MAX_CLIPS) list.shift();
   return { clip, added: true };
