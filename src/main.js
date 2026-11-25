@@ -5,7 +5,7 @@
 // - 摘句：在书里选中一句，点左边栏的共读按钮（或「摘下选中的句子」命令），打卡时默认勾上（见 clips.js）。
 // - 读书打卡：命令面板、左边栏按钮、状态栏都能打开。
 // - 打开一本书时，在后台把封面传到共读书架上对应的书（只传网站上还没有封面图的）。
-const { Plugin, Modal, Notice, TFile, PluginSettingTab, Setting, requestUrl } = require('obsidian');
+const { Plugin, Modal, Notice, TFile, PluginSettingTab, Setting, requestUrl, setIcon } = require('obsidian');
 const Q = require('./qiaomu');
 const { createApi } = require('./api');
 const { CoverSync } = require('./cover-sync');
@@ -15,6 +15,8 @@ const C = require('./connect');
 const Clock = require('./clock');
 const Clips = require('./clips');
 const R = require('./reader-dom');
+const { barView } = require('./timer-view');
+const { titlesFromPath } = require('./match');
 
 const DEFAULTS = {
   base: 'https://123.57.56.38:627',
@@ -70,10 +72,17 @@ class GongduPlugin extends Plugin {
       warn: text => this.note(text, 'warn'),
     });
 
+    // 状态栏：常驻的计时（计时中 / 已暂停、书名、这本书今天几分钟）+ 打卡了没有。点一下打开打卡窗口。
     this.bar = this.addStatusBarItem();
     this.bar.addClass('gongdu-bar', 'mod-clickable');
+    this.barIcon = this.bar.createSpan({ cls: 'gongdu-bar-icon' });
+    this.barText = this.bar.createSpan({ cls: 'gongdu-bar-text' });
     this.bar.setAttribute('aria-label', '共读：点一下打卡');
+    this.bar.setAttribute('data-tooltip-position', 'top');
     this.registerDomEvent(this.bar, 'click', () => this.openCheckin());
+    this.checked = null;   // 今天打过卡没有（问过网站才知道）
+    this.connected = !!this.data.token;
+    this.barProblem = '';  // 连不上、令牌失效时的说法
 
     this.addCommand({ id: 'checkin', name: '读书打卡', callback: () => this.openCheckin() });
     this.addCommand({ id: 'clip', name: '摘下选中的句子（打卡时会列出来）', callback: () => this.clipSelection(true) });
@@ -88,8 +97,8 @@ class GongduPlugin extends Plugin {
     // Qiaomu Reader 的阅读页不算 Obsidian 的“当前文件”（打开书时没有 file-open），
     // 所以看当前标签页：换了标签页、标签页里换了书，都会触发 active-leaf-change / layout-change。
     this.registerEvent(this.app.workspace.on('file-open', file => this.onOpen(file)));
-    this.registerEvent(this.app.workspace.on('active-leaf-change', leaf => this.onOpen(bookFileIn(this.app, leaf))));
-    this.registerEvent(this.app.workspace.on('layout-change', () => this.onOpen(this.currentBook())));
+    this.registerEvent(this.app.workspace.on('active-leaf-change', leaf => { this.onOpen(bookFileIn(this.app, leaf)); this.renderBar(); }));
+    this.registerEvent(this.app.workspace.on('layout-change', () => { this.onOpen(this.currentBook()); this.renderBar(); }));
     this.app.workspace.onLayoutReady(() => {
       this.refreshBar(true);
       this.onOpen(this.currentBook());
@@ -100,11 +109,18 @@ class GongduPlugin extends Plugin {
     this.lastActive = 0;
     this.lastTick = 0;
     this.unsaved = 0;
-    this.watched = new WeakSet();
-    const mark = () => { this.lastActive = Date.now(); };
+    // 挂在阅读页里（foliate 的 iframe 等）的监听：插件关掉时要撤下（onunload 里 detach）
+    const mark = () => {
+      const was = this.lastActive;
+      this.lastActive = Date.now();
+      if (!was || this.lastActive - was > Clock.IDLE_MS) this.renderBar(); // 从“3 分钟没动”回来，马上显示计时中
+    };
+    this.watcher = R.createWatcher(mark);
     for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) this.registerDomEvent(document, ev, mark, { capture: true, passive: true });
-    this.markActive = mark;
     this.registerInterval(window.setInterval(() => this.tickClock(), Clock.TICK_MS));
+    // 切到别的软件、切回来：状态栏马上变，不用等下一次计时
+    for (const ev of ['focus', 'blur']) this.registerDomEvent(window, ev, () => this.renderBar());
+    this.registerDomEvent(document, 'visibilitychange', () => this.renderBar());
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       Clock.rename(this.data.time, oldPath, file.path);
       Clock.rename(this.data.committed, oldPath, file.path);
@@ -115,7 +131,53 @@ class GongduPlugin extends Plugin {
 
   onunload() {
     window.clearTimeout(this.saveTimer); window.clearTimeout(this.noteTimer);
+    if (this.watcher) this.watcher.detach(); // 阅读页里挂的监听不归 Obsidian 管，自己撤下
+    if (this.ribbon) { this.ribbon.removeAttribute('data-gongdu-min'); }
     if (this.unsaved) this.saveData(this.data);
+  }
+
+  /** 现在这一刻的计时情况（tick 和状态栏共用）。 */
+  clockCtx(now = Date.now()) {
+    const r = this.readingLeaf();
+    return {
+      r,
+      ctx: {
+        now, day: Q.dayOf(now), book: r ? r.file.path : '',
+        focused: document.hasFocus() && document.visibilityState !== 'hidden',
+        lastActive: this.lastActive, paused: !!this.checkinOpen,
+      },
+    };
+  }
+
+  /** 画状态栏和左边栏按钮上的计时。不问网站，随时可以调。 */
+  renderBar() {
+    if (!this.bar) return;
+    const { r, ctx } = this.clockCtx();
+    const st = Clock.stateOf(ctx);
+    const title = r ? (titlesFromPath(r.file.path)[0] || r.file.basename) : '';
+    const view = barView({
+      connected: !!this.data.token, state: st.state, reason: st.reason, title,
+      bookSec: r ? Clock.secondsOf(this.data.time, ctx.day, r.file.path) : 0,
+      todaySec: Clock.secondsOf(this.data.time, ctx.day),
+      checked: this.checked,
+    });
+    const noting = this.noteUntil && Date.now() < this.noteUntil && this.lastNote;
+    let text = view.text;
+    if (this.barProblem && this.data.token) text = `${text.replace(/ · 今天(打过卡了|还没打卡)$/, '')} · ${this.barProblem}`;
+    if (noting) text = `${text.replace(/ · 今天(打过卡了|还没打卡)$/, '')} · ${this.lastNote.text}`;
+    if (this.barIconName !== view.icon) { setIcon(this.barIcon, view.icon); this.barIconName = view.icon; }
+    this.barText.setText(text);
+    this.bar.toggleClass('gongdu-running', view.running);
+    this.bar.toggleClass('gongdu-paused', !view.running);
+    this.bar.toggleClass('gongdu-warn', !!(noting && this.lastNote.kind === 'warn') || !!this.barProblem);
+    this.bar.toggleClass('gongdu-hint', !!(noting && this.lastNote.kind !== 'warn'));
+    this.bar.setAttribute('aria-label', noting ? `${this.lastNote.text}\n${view.tooltip}` : view.tooltip);
+    // Qiaomu Reader 读书时会把状态栏藏起来，所以左边栏按钮上也标出来：分钟数，计时中是强调色
+    if (this.ribbon) {
+      if (view.badge) this.ribbon.setAttribute('data-gongdu-min', view.badge); else this.ribbon.removeAttribute('data-gongdu-min');
+      this.ribbon.toggleClass('gongdu-running', view.running);
+      this.ribbon.setAttribute('aria-label', `共读：读书打卡。${view.tooltip}`);
+    }
   }
 
   /** 正在看的标签页里的书和这个标签页（只看当前标签页，侧边栏开着的书不算在读）。 */
@@ -130,7 +192,7 @@ class GongduPlugin extends Plugin {
   tickClock() {
     const now = Date.now();
     const r = this.readingLeaf();
-    if (r && r.leaf.view && r.leaf.view.containerEl) R.watchActivity(r.leaf.view.containerEl, this.markActive, this.watched);
+    if (r && r.leaf.view && r.leaf.view.containerEl) this.watcher.watch(r.leaf.view.containerEl);
     // 阅读器的进度变了也算翻过页（有的翻页方式外面收不到事件）
     if (r) {
       const qm = this.app.plugins && this.app.plugins.plugins && this.app.plugins.plugins[Q.PLUGIN_ID];
@@ -139,12 +201,9 @@ class GongduPlugin extends Plugin {
       if (sig && this.progressSig && sig !== this.progressSig) this.lastActive = now;
       this.progressSig = sig;
     }
-    const added = Clock.tick(this.data.time, this.lastTick, {
-      now, day: Q.dayOf(now), book: r ? r.file.path : '',
-      focused: document.hasFocus() && document.visibilityState !== 'hidden',
-      lastActive: this.lastActive, paused: !!this.checkinOpen,
-    });
+    const added = Clock.tick(this.data.time, this.lastTick, this.clockCtx(now).ctx);
     this.lastTick = now;
+    this.renderBar();
     if (!added) return;
     this.unsaved += added;
     if (this.unsaved >= 60) { this.unsaved = 0; Clock.prune(this.data.time); Clock.prune(this.data.committed); this.saveSoon(); }
@@ -255,20 +314,16 @@ class GongduPlugin extends Plugin {
 
   /** 状态栏：今天读了几分钟、打卡了没有。force：不用缓存，重新问网站。 */
   async refreshBar(force = false) {
-    if (this.noteUntil && Date.now() < this.noteUntil) return;
-    this.bar.removeClass('gongdu-warn', 'gongdu-hint');
-    if (!this.data.token) { this.bar.setText('共读 · 还没连接'); return; }
-    let text = '共读';
+    if (!this.data.token) { this.checked = null; this.barProblem = ''; this.renderBar(); return; }
     try {
-      const qm = await readQiaomu(this.app);
       const status = await this.sync.status(force);
-      const mine = this.minutesToday();
-      const m = mine || Math.round(Q.secondsOn(qm.settings, status.day || Q.dayOf(Date.now())) / 60);
-      text = `共读 · ${m ? `今天读了 ${m} 分钟 · ` : ''}${status.checked ? '今天打过卡了' : '今天还没打卡'}`;
+      this.checked = !!status.checked;
+      this.barProblem = '';
     } catch (e) {
-      text = e && e.status === 401 ? '共读 · 连接失效了，到共读网站重新连接' : '共读 · 没连上';
+      this.checked = null;
+      this.barProblem = e && e.status === 401 ? '连接失效了，到共读网站重新连接' : '没连上共读';
     }
-    if (!(this.noteUntil && Date.now() < this.noteUntil)) this.bar.setText(text);
+    this.renderBar();
   }
 
   /**
@@ -281,13 +336,10 @@ class GongduPlugin extends Plugin {
       this.ribbon.removeClass('gongdu-attn-hint', 'gongdu-attn-warn');
       this.ribbon.addClass(kind === 'warn' ? 'gongdu-attn-warn' : 'gongdu-attn-hint');
     }
-    this.bar.setText(`共读 · ${text}`);
-    this.bar.removeClass('gongdu-warn', 'gongdu-hint');
-    this.bar.addClass(kind === 'warn' ? 'gongdu-warn' : 'gongdu-hint');
-    this.bar.setAttribute('aria-label', text);
     this.noteUntil = Date.now() + NOTE_MS;
+    this.renderBar();
     window.clearTimeout(this.noteTimer);
-    this.noteTimer = window.setTimeout(() => { this.noteUntil = 0; this.bar.setAttribute('aria-label', '共读：点一下打卡'); this.refreshBar(); }, NOTE_MS);
+    this.noteTimer = window.setTimeout(() => { this.noteUntil = 0; this.refreshBar(); }, NOTE_MS);
   }
 }
 
