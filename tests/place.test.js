@@ -87,3 +87,45 @@ test('摘句带上出处；高亮带上 cfi', () => {
   const hls = Q.highlightsOn({ 'a.epub': [{ id: 'h', text: '高亮', cfi: 'epubcfi(/6/6!/4/2)', created: Date.UTC(2026, 10, 24, 4) }] }, 'a.epub', day);
   assert.equal(hls[0].cfi, 'epubcfi(/6/6!/4/2)');
 });
+
+test('整本书只有一个文件：按选中那段前面最近的目录锚点找章节，不会一律落到“附录”', () => {
+  // 假的 document：几个带 id 的标题，按文档顺序排；compareDocumentPosition 用顺序比
+  const order = [];
+  const node = id => { const n = { id, contains: x => x === n, compareDocumentPosition: o => (order.indexOf(o) > order.indexOf(n) ? 4 : 2) }; order.push(n); return n; };
+  const h11 = node('nav_point_11'); const p1 = node(null); const h13 = node('nav_point_13'); const p2 = node(null); const h40 = node('nav_point_40');
+  const doc = { getElementById: id => order.find(n => n.id === id) || null };
+  for (const n of order) n.ownerDocument = doc;
+  const toc = [
+    { label: '第1章 神经网络的思想', href: 'OEBPS/text00000.html#nav_point_11', subitems: [
+      { label: '1-2 神经元工作的数学表示', href: 'OEBPS/text00000.html#nav_point_13' }] },
+    { label: '附录', href: 'OEBPS/text00000.html#nav_point_40' },
+  ];
+  const book = { toc, sections: [{ id: 'OEBPS/text00000.html' }] };
+  const view = { book, renderer: { getContents: () => [{ doc, index: 0 }] }, lastLocation: { section: { current: 0 } } };
+  assert.equal(Place.placeOf(view).location, '附录', '只知道第几个文件时（以前的样子）');
+  assert.equal(Place.placeOf(view, '', { startContainer: p2 }).location, '第1章 神经网络的思想 1-2 神经元工作的数学表示');
+  assert.equal(Place.placeOf(view, '', { startContainer: p1 }).location, '第1章 神经网络的思想');
+  // 现在这一页的 range（foliate 的 lastLocation.range）
+  view.lastLocation = { section: { current: 0 }, range: { startContainer: p2 } };
+  assert.equal(Place.placeOf(view).location, '第1章 神经网络的思想 1-2 神经元工作的数学表示');
+  // 高亮：foliate 解 cfi 给出 anchor(doc)
+  view.resolveCFI = () => ({ index: 0, anchor: () => ({ startContainer: p1 }) });
+  assert.equal(Place.placeOf(view, 'epubcfi(/6/2!/4/10)').location, '第1章 神经网络的思想');
+  void h11; void h13; void h40;
+});
+
+test('目录只到章：再接上选中那段前面最近的小节标题', () => {
+  const order = [];
+  const node = (id, tag, text) => { const n = { id, tagName: tag, textContent: text || '', contains: x => x === n, compareDocumentPosition: o => (order.indexOf(o) > order.indexOf(n) ? 4 : 2) }; order.push(n); return n; };
+  node('nav_point_4', 'H1', '第 1 章 神经网络的思想');
+  node(null, 'H2', '1-1 神经网络和深度学习'); node(null, 'H3', '小节一');
+  node(null, 'H2', '1-2 神经元工作的数学表示'); node(null, 'H3', '整理神经元的工作');
+  const p = node(null, 'P');
+  node(null, 'H2', '1-3 激活函数');
+  node('nav_point_185', 'H1', '附录');
+  const doc = { getElementById: id => order.find(n => n.id === id) || null, querySelectorAll: () => order.filter(n => /^H\d/.test(n.tagName)) };
+  for (const n of order) n.ownerDocument = doc;
+  const book = { toc: [{ label: '第 1 章　神经网络的思想', href: 'OEBPS/text00000.html#nav_point_4' }, { label: '附录', href: 'OEBPS/text00000.html#nav_point_185' }], sections: [{ id: 'OEBPS/text00000.html' }] };
+  const view = { book, renderer: { getContents: () => [{ doc, index: 0 }] }, lastLocation: { section: { current: 0 } } };
+  assert.equal(Place.placeOf(view, '', { startContainer: p }).location, '第 1 章 神经网络的思想 1-2 神经元工作的数学表示');
+});

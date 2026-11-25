@@ -235,11 +235,11 @@ class GongduPlugin extends Plugin {
    */
   clipSelection(loud = false) {
     const r = this.readingLeaf();
-    const text = r && r.leaf.view && r.leaf.view.containerEl ? R.selectedText(r.leaf.view.containerEl) : '';
+    const { text, range } = r && r.leaf.view && r.leaf.view.containerEl ? R.selection(r.leaf.view.containerEl) : { text: '', range: null };
     if (!text) { if (loud) new Notice('先在书里选中一句话，再摘。'); return null; }
     const day = Q.dayOf(Date.now());
     this.data.clips = Clips.pruneDays(this.data.clips, day);
-    const out = Clips.add(this.data.clips, { text, book: r.file.path, day, now: Date.now(), ...this.placeNow(r) });
+    const out = Clips.add(this.data.clips, { text, book: r.file.path, day, now: Date.now(), ...this.placeNow(r, '', range) });
     if (!out) return null;
     this.saveSoon();
     if (loud) this.clipNotice(out, r.file.path, day);
@@ -250,9 +250,9 @@ class GongduPlugin extends Plugin {
    * 阅读页里现在读到第几章第几节（还有电子书自带的纸书页码）。cfi：高亮记的位置，按它找章节。
    * 拿不到就是 { location: '', page: '' }。
    */
-  placeNow(r = this.readingLeaf(), cfi = '') {
+  placeNow(r = this.readingLeaf(), cfi = '', range = null) {
     const el = r && r.leaf.view && r.leaf.view.containerEl;
-    return Place.placeOf(el ? R.foliateView(el) : null, cfi);
+    return Place.placeOf(el ? R.foliateView(el) : null, cfi, range);
   }
 
   /** 摘好以后的一句短提示（几秒就消失，不是弹窗）。 */

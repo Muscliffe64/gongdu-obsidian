@@ -64,6 +64,63 @@ function chapterAtIndex(book, index) {
   return best && best.labels.length ? joinLabels(best.labels) : '';
 }
 
+/**
+ * 按书里的具体位置找章节：目录里指到这个文件、带 #锚点 的各项，锚点在 range 开头之前（或者包着它）的、最靠后的那一项。
+ * 有的电子书整本只有一个文件（比如《深度学习的数学》），只看第几个文件会一律落到目录最后一项（“附录”），所以要看位置。
+ * 找不到返回 ''。
+ */
+function chapterAtRange(book, index, range) {
+  const start = range && range.startContainer;
+  const doc = start && (start.ownerDocument || start);
+  if (!book || !doc || typeof doc.getElementById !== 'function' || !Number.isInteger(index) || index < 0) return '';
+  let best = null; let bestEl = null; let whole = null;
+  for (const e of flatToc(book.toc)) {
+    const href = String(e.item.href || '');
+    if (sectionIndexOf(book, href) !== index) continue;
+    const frag = href.split('#')[1];
+    if (!frag) { if (!whole) whole = e; continue; }
+    let id = frag;
+    try { id = decodeURIComponent(frag); } catch { /* 原样用 */ }
+    const el = doc.getElementById(id);
+    if (!el) continue;
+    const before = el === start || (el.contains && el.contains(start)) || (el.compareDocumentPosition(start) & 4); // 4：start 在 el 后面
+    if (!before) continue;
+    if (!bestEl || bestEl === el || (bestEl.compareDocumentPosition(el) & 4) || (bestEl.contains && bestEl.contains(el))) { best = e; bestEl = el; }
+  }
+  const pick = best || whole;
+  if (!pick || !pick.labels.length) return '';
+  const sub = bestEl ? subHeading(doc, bestEl, start) : '';
+  return joinLabels(sub && !pick.labels.includes(sub) ? [...pick.labels, sub] : pick.labels);
+}
+
+/**
+ * 目录只到“第几章”的书：在这一章里，再找 start 前面最近的小节标题（h1–h4 里级别最高的那一级的最后一个），
+ * 比如“第 1 章 神经网络的思想”后面接“1-2 神经元工作的数学表示”。没有就是 ''。
+ */
+function subHeading(doc, anchor, start) {
+  if (typeof doc.querySelectorAll !== 'function') return '';
+  let best = null; let bestLevel = 9;
+  for (const h of Array.from(doc.querySelectorAll('h1,h2,h3,h4'))) {
+    if (h === anchor || (anchor.contains && anchor.contains(h))) continue;
+    if (!(anchor.compareDocumentPosition(h) & 4)) continue;             // 要在目录锚点后面
+    if (!(h.compareDocumentPosition(start) & 4) && !(h.contains && h.contains(start))) break; // 到了 start 后面就停
+    const level = Number(String(h.tagName || h.localName || '').replace(/\D/g, '')) || 9;
+    if (level <= bestLevel) { best = h; bestLevel = level; }
+  }
+  return best ? tidy(best.textContent) : '';
+}
+
+/** range 在书的第几个文件里：foliate 的 renderer.getContents() 里同一个 document 的那一项。 */
+function indexOfRange(view, range) {
+  const start = range && range.startContainer;
+  const doc = start && (start.ownerDocument || start);
+  if (!doc || !view || !view.renderer || typeof view.renderer.getContents !== 'function') return -1;
+  try {
+    const c = (view.renderer.getContents() || []).find(x => x && x.doc === doc);
+    return c && Number.isInteger(c.index) ? c.index : -1;
+  } catch { return -1; }
+}
+
 /** 目录里这一项（foliate 给的 tocItem）连同上面各级的标题。 */
 function chapterOfItem(book, tocItem) {
   if (!book || !tocItem) return '';
@@ -82,22 +139,38 @@ function pageOf(pageItem) {
 /**
  * 现在读到的地方：{ location, page }，没有的是空字符串。
  * cfi：高亮自己记的位置，有就按它找章节（高亮可能不在现在这一页）；没有就用 lastLocation。
+ * range：选中的那段（摘句时），先按它在书里的位置找章节；没有就看 lastLocation.range（现在这一页）。
  */
-function placeOf(view, cfi) {
+function placeOf(view, cfi, range = null) {
   const out = { location: '', page: '' };
   if (!view || !view.book) return out;
   try {
     if (cfi) {
-      let index = -1;
-      try { const r = typeof view.resolveCFI === 'function' ? view.resolveCFI(cfi) : null; if (r && Number.isInteger(r.index)) index = r.index; } catch { index = -1; }
+      let index = -1; let at = null;
+      try {
+        const r = typeof view.resolveCFI === 'function' ? view.resolveCFI(cfi) : null;
+        if (r && Number.isInteger(r.index)) {
+          index = r.index;
+          // 这个文件现在打开着：foliate 的 anchor(doc) 给出高亮在书里的位置，按位置找章节
+          const c = view.renderer && typeof view.renderer.getContents === 'function' ? (view.renderer.getContents() || []).find(x => x && x.index === index) : null;
+          if (c && c.doc && typeof r.anchor === 'function') { const a = r.anchor(c.doc); if (a && a.startContainer) at = a; }
+        }
+      } catch { index = -1; }
       if (index < 0) index = indexFromCfi(cfi);
-      out.location = chapterAtIndex(view.book, index);
+      out.location = (at ? chapterAtRange(view.book, index, at) : '') || chapterAtIndex(view.book, index);
       return out;
     }
     const loc = view.lastLocation || null;
+    if (range) {
+      const i = indexOfRange(view, range);
+      out.location = chapterAtRange(view.book, i, range);
+      if (out.location) { out.page = pageOf(loc && loc.pageItem); return out; }
+    }
     if (!loc) return out;
     const index = loc.section && Number.isInteger(loc.section.current) ? loc.section.current : loc.index;
-    out.location = chapterOfItem(view.book, loc.tocItem) || chapterAtIndex(view.book, index);
+    out.location = chapterOfItem(view.book, loc.tocItem)
+      || (loc.range ? chapterAtRange(view.book, index, loc.range) : '')
+      || chapterAtIndex(view.book, index);
     out.page = pageOf(loc.pageItem);
   } catch { /* 读不到就不带出处 */ }
   return out;
@@ -110,4 +183,4 @@ function placeLabel({ location = '', page = '' } = {}) {
   return [tidy(location), pl].filter(Boolean).join(' · ');
 }
 
-module.exports = { flatToc, chapterAtIndex, chapterOfItem, indexFromCfi, pageOf, placeOf, placeLabel, LOC_MAX };
+module.exports = { flatToc, chapterAtIndex, chapterAtRange, chapterOfItem, indexFromCfi, pageOf, placeOf, placeLabel, LOC_MAX };
