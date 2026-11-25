@@ -17,6 +17,7 @@ const Clips = require('./clips');
 const R = require('./reader-dom');
 const { barView } = require('./timer-view');
 const { titlesFromPath } = require('./match');
+const L = require('./checkin-logic');
 
 const DEFAULTS = {
   base: 'https://123.57.56.38:627',
@@ -26,6 +27,7 @@ const DEFAULTS = {
   covers: {},  // 书 id → { sig, result, at }：封面传没传过
   time: {},    // 自动计时：{ "YYYY-MM-DD": { 书的路径: 秒 } }
   committed: {}, // 打卡时已经算进去的插件秒数：{ "YYYY-MM-DD": { 书的路径: 秒 } }
+  remindedDay: '', // 读完离开书时提醒打卡：今天提醒过没有
   clips: [],   // 读书时摘下、还没打卡交上去的句子
 };
 
@@ -88,7 +90,8 @@ class GongduPlugin extends Plugin {
     this.addCommand({ id: 'clip', name: '摘下选中的句子（打卡时会列出来）', callback: () => this.clipSelection(true) });
     this.addCommand({ id: 'sync-cover', name: '再试一次同步这本书的封面', callback: () => this.retryCover() });
     // 左边栏的按钮。Qiaomu Reader 读书时会藏起状态栏，所以有提示时也在这个按钮上标一个小点，点开打卡窗口能看到是什么。
-    this.ribbon = this.addRibbonIcon('book-open-check', '共读：读书打卡', () => this.openCheckin());
+    // 书里选中了一句：点一下摘下来（不打开窗口，不打断读书）；没选中：点一下打卡。
+    this.ribbon = this.addRibbonIcon('book-open-check', '共读：书里选中一句时点一下摘下来；没选中时点一下打卡', () => this.ribbonClick());
     this.ribbon.addClass('gongdu-ribbon');
     this.addSettingTab(new GongduSettingTab(this.app, this));
     // 共读网站上点「连接 Obsidian」会打开 obsidian://gongdu-connect?server=…&code=…
@@ -97,8 +100,8 @@ class GongduPlugin extends Plugin {
     // Qiaomu Reader 的阅读页不算 Obsidian 的“当前文件”（打开书时没有 file-open），
     // 所以看当前标签页：换了标签页、标签页里换了书，都会触发 active-leaf-change / layout-change。
     this.registerEvent(this.app.workspace.on('file-open', file => this.onOpen(file)));
-    this.registerEvent(this.app.workspace.on('active-leaf-change', leaf => { this.onOpen(bookFileIn(this.app, leaf)); this.renderBar(); }));
-    this.registerEvent(this.app.workspace.on('layout-change', () => { this.onOpen(this.currentBook()); this.renderBar(); }));
+    this.registerEvent(this.app.workspace.on('active-leaf-change', leaf => { this.onOpen(bookFileIn(this.app, leaf)); this.renderBar(); this.checkLeftBook(); }));
+    this.registerEvent(this.app.workspace.on('layout-change', () => { this.onOpen(this.currentBook()); this.renderBar(); this.checkLeftBook(); }));
     this.app.workspace.onLayoutReady(() => {
       this.refreshBar(true);
       this.onOpen(this.currentBook());
@@ -225,8 +228,55 @@ class GongduPlugin extends Plugin {
     const out = Clips.add(this.data.clips, { text, book: r.file.path, day, now: Date.now() });
     if (!out) return null;
     this.saveSoon();
-    if (loud) new Notice(out.added ? `摘下了：「${out.clip.text.slice(0, 30)}${out.clip.text.length > 30 ? '…' : ''}」，打卡时会列出来。` : '这句已经摘过了。');
+    if (loud) this.clipNotice(out, r.file.path, day);
     return out;
+  }
+
+  /** 摘好以后的一句短提示（几秒就消失，不是弹窗）。 */
+  clipNotice(out, path, day) {
+    const n = Clips.forBook(this.data.clips, day, path).length;
+    const t = out.clip.text;
+    new Notice(out.added ? `摘下了：「${t.slice(0, 24)}${t.length > 24 ? '…' : ''}」。今天这本书摘了 ${n} 句，打卡时会带上。` : '这句已经摘过了。', 3500);
+  }
+
+  /** 左边栏共读按钮：选中了新的一句就摘下来；否则打开打卡窗口。 */
+  ribbonClick() {
+    const r = this.readingLeaf();
+    const text = r && r.leaf.view && r.leaf.view.containerEl ? R.selectedText(r.leaf.view.containerEl) : '';
+    const day = Q.dayOf(Date.now());
+    const already = !!text && this.data.clips.some(c => c.day === day && c.book === r.file.path && c.text === Clips.cleanText(text));
+    if (L.ribbonAction({ selection: text, alreadyClipped: already }) === 'clip') {
+      const out = this.clipSelection(false);
+      if (out) { this.clipNotice(out, r.file.path, day); return; }
+    }
+    this.openCheckin();
+  }
+
+  /**
+   * 读完离开书（换到别的标签页、关掉书，现在没在读别的书）：这本书今天计了 10 分钟以上、今天还没打卡，
+   * 就在右上角提醒一句“打卡？”，带个按钮。一天最多一次，不是弹窗。
+   */
+  async checkLeftBook() {
+    const r = this.readingLeaf();
+    const nowBook = r ? r.file.path : '';
+    const leftBook = this.lastReadingBook && this.lastReadingBook !== nowBook ? this.lastReadingBook : '';
+    this.lastReadingBook = nowBook;
+    if (!leftBook || nowBook) return;
+    const today = Q.dayOf(Date.now());
+    const base = { leftBook, nowBook, bookSec: Clock.secondsOf(this.data.time, today, leftBook), connected: !!this.data.token, remindedDay: this.data.remindedDay, today, checkinOpen: !!this.checkinOpen };
+    // 先粗看一下（不问网站），再问网站今天打过卡没有（可能在网页上打过）
+    if (!L.shouldRemind({ ...base, checked: false })) return;
+    await this.refreshBar(true);
+    if (!L.shouldRemind({ ...base, checked: this.checked })) return;
+    this.data.remindedDay = today;
+    this.saveSoon();
+    const minutes = Math.floor(base.bookSec / 60);
+    const title = titlesFromPath(leftBook)[0] || '这本书';
+    const frag = document.createDocumentFragment();
+    frag.createSpan({ text: `今天读《${title}》${minutes} 分钟了，还没打卡。` });
+    const btn = frag.createEl('button', { cls: 'mod-cta gongdu-notice-btn', text: '打卡' });
+    const notice = new Notice(frag, 15000);
+    btn.addEventListener('click', e => { e.stopPropagation(); notice.hide(); this.openCheckin(); });
   }
 
   /** 交上去的摘句去掉。 */
