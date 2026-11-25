@@ -5,7 +5,7 @@
 // 进去的办法：foliate-view 元素的 renderer.getContents()（foliate-js 公开的接口），以及 open 的 shadow root 和同源 iframe。
 // 只看、只听，不改阅读页里的任何东西。
 
-const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart', 'scroll', 'selectionchange'];
+const ACTIVITY_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart', 'scroll', 'selectionchange'];
 
 /** root 下面所有能进去的地方：root 自己、各层 shadow root、同源 iframe 里的 document。 */
 function scopesIn(root, out = [], seen = new Set()) {

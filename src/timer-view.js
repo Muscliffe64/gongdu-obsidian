@@ -5,11 +5,11 @@ const REASONS = {
   'no-book': '没在 Qiaomu Reader 里打开书',
   checkin: '打卡窗口开着',
   unfocused: 'Obsidian 不在最前面',
-  idle: '3 分钟没翻页或滚动',
+  idle: '3 分钟没动',
 };
 
 const RESUME = {
-  idle: '翻页或滚动一下就接着记。',
+  idle: '翻页、滚动或者动一下鼠标就接着记，8 分钟之内回来的，停下的这段也补上。',
   unfocused: '回到 Obsidian 就接着记。',
   checkin: '关掉打卡窗口就接着记。',
   'no-book': '',

@@ -1,7 +1,7 @@
 'use strict';
 // 共读打卡：Obsidian 插件。和 Qiaomu Reader（乔木阅读器）一起用。
 // - 状态栏：今天读了几分钟、打卡了没有；点一下打开打卡窗口。
-// - 自动计时：在 Qiaomu Reader 里读书、最近 3 分钟有翻页或滚动才算，按书记（见 clock.js）。
+// - 自动计时：在 Qiaomu Reader 里读书、最近 3 分钟有动作才算，8 分钟之内回来的补上停下的那段，按书记（见 clock.js）。
 // - 摘句：在书里选中一句，点左边栏的共读按钮（或「摘下选中的句子」命令），打卡时默认勾上（见 clips.js）。
 // - 读书打卡：命令面板、左边栏按钮、状态栏都能打开。
 // - 打开一本书时，在后台把封面传到共读书架上对应的书（只传网站上还没有封面图的）。
@@ -109,21 +109,20 @@ class GongduPlugin extends Plugin {
     });
     this.registerInterval(window.setInterval(() => this.refreshBar(), 5 * 60 * 1000));
 
-    // 自动计时：外面的 document 和阅读页里（shadow DOM、iframe）的点击、按键、滚动都算“在读”。
+    // 自动计时：外面的 document 和阅读页里（shadow DOM、iframe）的点击、按键、滚动、鼠标移动都算“在读”。
+    // 右边栏的 AI 伴读也在这个 document 里，所以在那里点、滚、动鼠标也算。
     this.lastActive = 0;
     this.lastTick = 0;
     this.unsaved = 0;
+    this.hold = null; // 3 分钟没动时先记着、还没算进去的时间（见 clock.js 的 holdIdle）
     // 挂在阅读页里（foliate 的 iframe 等）的监听：插件关掉时要撤下（onunload 里 detach）
-    const mark = () => {
-      const was = this.lastActive;
-      this.lastActive = Date.now();
-      if (!was || this.lastActive - was > Clock.IDLE_MS) this.renderBar(); // 从“3 分钟没动”回来，马上显示计时中
-    };
+    const mark = () => this.markActive(Date.now());
     this.watcher = R.createWatcher(mark);
-    for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) this.registerDomEvent(document, ev, mark, { capture: true, passive: true });
+    for (const ev of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) this.registerDomEvent(document, ev, mark, { capture: true, passive: true });
     this.registerInterval(window.setInterval(() => this.tickClock(), Clock.TICK_MS));
-    // 切到别的软件、切回来：状态栏马上变，不用等下一次计时
-    for (const ev of ['focus', 'blur']) this.registerDomEvent(window, ev, () => this.renderBar());
+    // 切到别的软件、切回来：状态栏马上变，不用等下一次计时。切走了，停下的那段就不补了。
+    this.registerDomEvent(window, 'focus', () => this.renderBar());
+    this.registerDomEvent(window, 'blur', () => { this.hold = { since: this.lastActive, broken: true, sec: 0 }; this.renderBar(); });
     this.registerDomEvent(document, 'visibilitychange', () => this.renderBar());
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       Clock.rename(this.data.time, oldPath, file.path);
@@ -138,6 +137,18 @@ class GongduPlugin extends Plugin {
     if (this.watcher) this.watcher.detach(); // 阅读页里挂的监听不归 Obsidian 管，自己撤下
     if (this.ribbon) { this.ribbon.removeAttribute('data-gongdu-min'); }
     if (this.unsaved) this.saveData(this.data);
+  }
+
+  /** 有动作了：8 分钟之内回来的，把停下的那段补上；从“3 分钟没动”回来，马上显示计时中。 */
+  markActive(now) {
+    const was = this.lastActive;
+    if (this.hold) {
+      const added = Clock.resume(this.data.time, this.hold, now);
+      this.hold = null;
+      if (added) this.saveSoon();
+    }
+    this.lastActive = now;
+    if (!was || now - was > Clock.IDLE_MS) this.renderBar();
   }
 
   /** 现在这一刻的计时情况（tick 和状态栏共用）。 */
@@ -202,10 +213,12 @@ class GongduPlugin extends Plugin {
       const qm = this.app.plugins && this.app.plugins.plugins && this.app.plugins.plugins[Q.PLUGIN_ID];
       const pr = qm && qm.progress && qm.progress[r.file.path];
       const sig = pr ? `${r.file.path}|${pr.pct}|${pr.percent}` : '';
-      if (sig && this.progressSig && sig !== this.progressSig) this.lastActive = now;
+      if (sig && this.progressSig && sig !== this.progressSig) this.markActive(now);
       this.progressSig = sig;
     }
-    const added = Clock.tick(this.data.time, this.lastTick, this.clockCtx(now).ctx);
+    const { ctx } = this.clockCtx(now);
+    this.hold = Clock.holdIdle(this.hold, this.lastTick, ctx);
+    const added = Clock.tick(this.data.time, this.lastTick, ctx);
     this.lastTick = now;
     this.renderBar();
     if (!added) return;
