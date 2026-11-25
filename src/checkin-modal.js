@@ -1,7 +1,8 @@
 'use strict';
 // 读书打卡窗口：书、今天读了几分钟、读到哪里、读书时摘的句子和今天的高亮（每句可以加想法）、换封面（可选），一屏打完。
 // 窗口开着的时候自动计时停下（写想法、粘贴不算读书时间）。
-const { Modal, TFile, Platform } = require('obsidian');
+const { Modal, TFile, Platform, MarkdownRenderer, Component } = require('obsidian');
+const MathText = require('./mathtext');
 const Q = require('./qiaomu');
 const { matchBook } = require('./match');
 const { readQiaomu } = require('./obsidian-io');
@@ -32,14 +33,32 @@ function placeInputs(parent, place) {
   };
 }
 
+/** 粘贴来的 HTML 里有公式就转成 Markdown 文字；没有公式返回 null，照普通粘贴。 */
+function mathFromHtml(html) {
+  if (!html || typeof DOMParser === 'undefined' || !/<img|<math/i.test(html)) return null;
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return MathText.hasMath(doc.body) ? MathText.fromNode(doc.body) || null : null;
+  } catch { return null; }
+}
+
 class CheckinModal extends Modal {
   constructor(app, plugin) {
     super(app);
     this.plugin = plugin;
+    this.md = new Component();
+  }
+
+  /** 摘句的文字：有公式或者分了段，按 Markdown 显示（Obsidian 自己会渲染 $…$）；否则照原样。 */
+  showText(el, text) {
+    if (!/\$|\n|\*\*/.test(text) || !MarkdownRenderer || typeof MarkdownRenderer.render !== 'function') { el.setText(text); return; }
+    el.addClass('gongdu-md');
+    MarkdownRenderer.render(this.app, text, el, '', this.md).catch(() => { el.empty(); el.setText(text); });
   }
 
   async onOpen() {
     this.plugin.checkinOpen = true;
+    this.md.load();
     this.modalEl.addClass('gongdu-modal');
     this.titleEl.setText('读书打卡');
     this.contentEl.createEl('p', { cls: 'gongdu-note', text: '正在读阅读器的记录……' });
@@ -59,6 +78,7 @@ class CheckinModal extends Modal {
     this.plugin.checkinOpen = false;
     this.plugin.lastTick = Date.now(); // 窗口开着的这段不补算
     this.contentEl.empty();
+    this.md.unload();
   }
 
   /** 读网站的书架和今天的情况、阅读器的记录，选出这次打卡的那本书。 */
@@ -232,7 +252,8 @@ class CheckinModal extends Modal {
       const label = row.createEl('label');
       const box = label.createEl('input', { type: 'checkbox' });
       box.checked = checked;
-      label.createSpan({ text });
+      const span = label.createSpan({ cls: 'gongdu-hl-text' });
+      this.showText(span, text);
       const where = placeInputs(row, place);
       const thought = row.createEl('textarea', { cls: 'gongdu-thought', attr: { rows: '2', placeholder: '想法（可以不写）', maxlength: '500' } });
       const show = () => { thought.toggleClass('gongdu-hidden', !box.checked); where.row.toggleClass('gongdu-hidden', !box.checked); };
@@ -280,6 +301,15 @@ class CheckinModal extends Modal {
       more.addEventListener('click', () => { ownBody.removeClass('gongdu-hidden'); more.remove(); ownText.focus(); });
     }
     ownText.addEventListener('input', () => { clearError(null, exErr); countNote(); });
+    // 从书里复制来的公式（图片的 alt、MathML）写成 $…$，网站上显示成公式
+    ownText.addEventListener('paste', ev => {
+      const t = mathFromHtml(ev.clipboardData && ev.clipboardData.getData('text/html'));
+      if (!t) return;
+      ev.preventDefault();
+      const a = ownText.selectionStart, b = ownText.selectionEnd;
+      ownText.value = ownText.value.slice(0, a) + t + ownText.value.slice(b);
+      ownText.dispatchEvent(new Event('input'));
+    });
 
     function countNote() {
       const c = L.sendCount({ own: ownText.value.trim() ? 1 : 0, clips: clipped.filter(x => x.box.checked).length, highlights: picked.filter(x => x.box.checked).length });

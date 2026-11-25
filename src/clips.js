@@ -8,9 +8,13 @@ const MAX_CLIPS = 50;
 const MAX_SEND = 20;   // 网站一次打卡只收前 20 句
 const MIN_LEN = 2;     // 网站不收 2 个字以下的
 
-/** 选中的文字整理一下：合并空白，去掉首尾空格。太长的截到 1000 字（网站最多收这么多）。 */
+/**
+ * 选中的文字整理一下：合并空白（单个换行也当空格，选区里常有断行），去掉首尾空格；分段（空一行）留着，网站上按段显示。
+ * 太长的截到 1000 字（网站最多收这么多）。
+ */
 function cleanText(raw) {
-  return String(raw || '').replace(/\s+/g, ' ').trim().slice(0, MAX_LEN);
+  return String(raw || '').replace(/\r\n?/g, '\n').replace(/[^\S\n]+/g, ' ').replace(/ *\n */g, '\n')
+    .replace(/\n{2,}/g, '\u0000').replace(/\n/g, ' ').replace(/\u0000/g, '\n\n').trim().slice(0, MAX_LEN);
 }
 
 /**

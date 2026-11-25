@@ -68,3 +68,9 @@
 .gongdu-place input { font-size: var(--font-ui-small); min-width: 0; }
 .gongdu-place-loc { flex: 1; }
 .gongdu-place-page { flex: 0 0 5.5em; }
+
+/* 摘句里有公式或分了段：按 Markdown 显示，段落之间留一点空 */
+.gongdu-hl-text { min-width: 0; overflow-wrap: anywhere; }
+.gongdu-md p { margin: 0; }
+.gongdu-md p + p, .gongdu-md .math-block + p, .gongdu-md p + .math-block { margin-top: 0.5em; }
+.gongdu-md .math-block { overflow-x: auto; }
