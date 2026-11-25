@@ -187,7 +187,7 @@ class CheckinModal extends Modal {
         lines.push(`插件今天没为这本书计到时间，先按 Qiaomu Reader 自己的计时填（今天所有书一共 ${fromLog} 分钟，别的书已经记过的减掉了）。可以改。`);
       } else {
         lines.push(plan.siteMin ? `网站上这本书今天已经记了 ${plan.siteMin} 分钟，先填这个。` : '今天还没计到这本书的阅读时间。');
-        lines.push('在 Qiaomu Reader 里打开这本书读一会儿就会自动记（Obsidian 在最前面、3 分钟内翻过页或滚动过才算），也可以自己填个大概的分钟数。');
+        lines.push('在 Qiaomu Reader 里打开这本书读一会儿就会自动记（Obsidian 在最前面、3 分钟内翻过页、滚动过或动过鼠标才算，8 分钟之内回来的会补上停下的那段），也可以自己填个大概的分钟数。');
       }
       if (plan.otherBook) lines.push(`插件计的 ${Math.round(this.clockSeconds / 60)} 分钟是阅读器里这个文件的，选了别的书就不算进去。`);
       minNote.setText(lines.join(''));

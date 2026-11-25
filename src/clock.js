@@ -2,14 +2,18 @@
 // 自动计时：不用点开始、停止。插件每隔一会儿看一次，满足这三条才把这段时间算到正在读的书上：
 // 1. 当前标签页是 Qiaomu Reader 里的一本书；
 // 2. Obsidian 在最前面（窗口有焦点、没被藏起来）；
-// 3. 最近 3 分钟里翻过页、滚过、点过或按过键（走开了就不算）。
+// 3. 最近 3 分钟里翻过页、滚过、点过、按过键或者动过鼠标（走开了就不算）。
 // 打卡窗口开着的时候也不算（写想法、粘贴不算读书时间）。
+// 回来补上（2026-11-25 老师定的）：3 分钟没动先暂停，但如果离上次动作 8 分钟之内又动了，
+// 而且中间这本书一直开着、Obsidian 一直在最前面、打卡窗口没开，中间停下的这段补回来。
+// 读一页难的书、读右边 AI 伴读的长回答时不碰鼠标键盘，也算读书；真走开了的一般回来得更晚，或者切到了别的软件，就不补。
 // 记的是每本书每天的秒数：{ "YYYY-MM-DD": { 书的路径: 秒 } }，只留最近几天。
 
 const IDLE_MS = 3 * 60 * 1000;
 const TICK_MS = 15 * 1000;
 const MAX_STEP_MS = 2 * TICK_MS; // 两次检查隔太久（电脑睡眠、卡住）时，最多算这么长
 const KEEP_DAYS = 3;
+const BACKFILL_MS = 8 * 60 * 1000; // 离上次动作多久之内回来，才补中间停下的时间
 
 /**
  * 记一次。log：上面的对象（会被改）。ctx：{ now, day, book（路径或空）, focused, lastActive, paused }。
@@ -36,6 +40,36 @@ function stateOf(ctx) {
   if (!ctx.focused) return { state: 'paused', reason: 'unfocused' };
   if (!(ctx.now - ctx.lastActive <= IDLE_MS)) return { state: 'paused', reason: 'idle' };
   return { state: 'running', reason: '' };
+}
+
+/**
+ * 3 分钟没动、暂停着的时候，先把这段时间记在 hold 里（不算进去）：{ day, book, since, sec }。
+ * since 是上次动作的时间。换了书、换了一天、Obsidian 不在最前面、打卡窗口开着、
+ * 或者离上次动作已经超过 8 分钟，这一次停下就作废（broken），直到下一次动作前都不再补。
+ * 返回新的 hold（或 null）。
+ */
+function holdIdle(hold, last, ctx) {
+  const st = stateOf(ctx);
+  if (st.state === 'running') return null; // 动过了（已经补过），不用再留
+  const same = hold && hold.since === ctx.lastActive;
+  const broken = { since: ctx.lastActive, broken: true, sec: 0 };
+  if (same && hold.broken) return hold;
+  if (st.reason !== 'idle' || !(ctx.now - ctx.lastActive <= BACKFILL_MS)) return broken;
+  if (same && (hold.book !== ctx.book || hold.day !== ctx.day)) return broken;
+  const h = same ? hold : { day: ctx.day, book: ctx.book, since: ctx.lastActive, sec: 0 };
+  if (last) h.sec += Math.round(Math.min(Math.max(0, ctx.now - last), MAX_STEP_MS) / 1000);
+  return h;
+}
+
+/**
+ * 又动了：hold 还有效（离上次动作不超过 8 分钟）就把停下的时间补到那本书上。返回补了几秒。
+ * 不管补没补，调用的地方都要把 hold 清掉。
+ */
+function resume(log, hold, now) {
+  if (!hold || hold.broken || !hold.sec || !(now - hold.since <= BACKFILL_MS)) return 0;
+  const today = log[hold.day] || (log[hold.day] = {});
+  today[hold.book] = (today[hold.book] || 0) + hold.sec;
+  return hold.sec;
 }
 
 /** 某天某本书记了几秒；不给书就是那天所有书一共。 */
@@ -97,4 +131,4 @@ function commit(committed, day, book, sec) {
   today[book] = Math.max(today[book] || 0, sec || 0);
 }
 
-module.exports = { tick, stateOf, secondsOf, prune, rename, prefillMinutes, committedAfter, commit, IDLE_MS, TICK_MS, MAX_STEP_MS };
+module.exports = { holdIdle, resume, BACKFILL_MS, tick, stateOf, secondsOf, prune, rename, prefillMinutes, committedAfter, commit, IDLE_MS, TICK_MS, MAX_STEP_MS };

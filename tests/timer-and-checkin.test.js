@@ -33,8 +33,8 @@ test('状态栏：计时中 / 已暂停分得开，有书名（截短）和这�
   const idle = barView({ state: 'paused', reason: 'idle', title: '额尔古纳河右岸的长长的书名', bookSec: 40, checked: true });
   assert.equal(idle.text, '共读 · 已暂停 · 《额尔古纳河右岸的…》 不到 1 分钟 · 今天打过卡了');
   assert.equal(idle.icon, 'pause');
-  assert.match(idle.tooltip, /3 分钟没翻页或滚动/);
-  assert.match(idle.tooltip, /翻页或滚动一下就接着记/);
+  assert.match(idle.tooltip, /3 分钟没动/);
+  assert.match(idle.tooltip, /动一下鼠标就接着记，8 分钟之内回来的，停下的这段也补上/);
   assert.equal(idle.badge, '', '不到 1 分钟不标数字');
   assert.match(barView({ state: 'paused', reason: 'unfocused', title: '书', bookSec: 0 }).tooltip, /Obsidian 不在最前面.*回到 Obsidian 就接着记/);
 });
