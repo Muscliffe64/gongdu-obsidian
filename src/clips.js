@@ -79,4 +79,7 @@ function notIn(list, texts) {
   return list.filter(c => !seen.has(c.text));
 }
 
-module.exports = { cleanText, add, forBook, remove, pruneDays, notIn, dropFrom, planSend, acceptedIds, MAX_LEN, MAX_SEND };
+/** 一句摘句今天交没交过的记号：日期 + 书 + 整理过的文字。 */
+function sentKey(day, book, text) { return `${day}\u0000${book}\u0000${cleanText(text)}`; }
+
+module.exports = { sentKey, cleanText, add, forBook, remove, pruneDays, notIn, dropFrom, planSend, acceptedIds, MAX_LEN, MAX_SEND };
