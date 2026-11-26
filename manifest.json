@@ -4,6 +4,6 @@
   "version": "0.5.1",
   "minAppVersion": "1.5.0",
   "description": "和 Qiaomu Reader 一起用：读书时记下的时长、进度和高亮一键打卡到班级的共读网站；打开一本书时自动把封面同步到共读书架。",
-  "author": "共读",
+  "author": "Hangyu",
   "isDesktopOnly": false
 }
