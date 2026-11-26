@@ -23,21 +23,6 @@ test('左边栏按钮：选中了新的一句就摘下来，不打开窗口；�
   assert.equal(L.ribbonAction({ selection: '书里的一句话', alreadyClipped: true }), 'checkin', '摘完再点一下就是打卡');
 });
 
-test('摘要一行：书、分钟、进度；没填的说没填', () => {
-  assert.equal(L.summaryText({ title: '乡土中国', minutes: '37', percent: '25' }), '《乡土中国》 · 37 分钟 · 读到 25%');
-  assert.equal(L.summaryText({ title: '乡土中国', minutes: '', percent: '', isNew: true }), '《乡土中国》（加到书架） · 分钟没填 · 进度没填');
-  assert.equal(L.summaryText({}), '书没选 · 分钟没填 · 进度没填');
-});
-
-test('什么时候一打开就展开书、分钟、进度：拿不准的都说出来', () => {
-  assert.deepEqual(L.detailReasons({ hasFile: true, minutes: '37', percent: '25', source: 'clock' }), [], '都是插件拿到的，收起来');
-  assert.deepEqual(L.detailReasons({ hasFile: true, minutes: '', percent: '25', source: 'none' }), ['今天还没计到这本书的阅读时间，请填分钟数']);
-  assert.deepEqual(L.detailReasons({ hasFile: true, minutes: '45', percent: '25', source: 'none' }), ['分钟数不是插件计时得来的，请看一下对不对']);
-  assert.deepEqual(L.detailReasons({ hasFile: true, minutes: '20', percent: '25', source: 'qiaomu' }), ['分钟数不是插件计时得来的，请看一下对不对']);
-  assert.deepEqual(L.detailReasons({ hasFile: false, minutes: '', percent: '', source: 'none', isNew: true, newTitle: '' }), [
-    '没找到阅读器里正在读的书，请选一下是哪本', '请填书名', '今天还没计到这本书的阅读时间，请填分钟数', '请填读到百分之几']);
-});
-
 test('读完离开书时提醒打卡：条件都满足才提醒，一天一次', () => {
   const ok = { leftBook: 'Books/乡土中国.epub', nowBook: '', bookSec: 12 * 60, connected: true, checked: false, remindedDay: '', today: '2026-11-21', checkinOpen: false };
   assert.equal(L.shouldRemind(ok), true);
@@ -58,4 +43,40 @@ test('打卡成功后自己关窗口：有要看一眼的事就不关', () => {
   assert.equal(L.canAutoClose({ left: 2 }), false, '还有摘句没交上去');
   assert.equal(L.canAutoClose({ heldHighlights: true }), false);
   assert.equal(L.canAutoClose({ coverProblem: true }), false);
+});
+
+test('0.5.1 打卡窗口变简单：分钟下面只有一句短说明，详细的点“怎么算的”才看', () => {
+  const clock = L.minutesHint({ source: 'clock', clockMin: 37, freshMin: 37, siteMin: 0 });
+  assert.deepEqual(clock, { text: '插件计时 37 分钟', warn: false, long: '' });
+  const plus = L.minutesHint({ source: 'clock', clockMin: 50, freshMin: 20, siteMin: 30 });
+  assert.equal(plus.text, '插件计时：网站上已记 30 分钟，加上新读的 20 分钟');
+  const none = L.minutesHint({ source: 'none', siteMin: 0 });
+  assert.equal(none.text, '还没计到时间，请填个大概的分钟数');
+  assert.equal(none.warn, true);
+  assert.match(none.long, /自动计时/);
+  const site = L.minutesHint({ source: 'none', siteMin: 25 });
+  assert.equal(site.text, '网站上今天已记 25 分钟');
+  assert.equal(site.warn, false);
+  const qm = L.minutesHint({ source: 'qiaomu', siteMin: 0 }, { fromLog: 42 });
+  assert.equal(qm.warn, true);
+  assert.match(qm.long, /一共 42 分钟/);
+  const other = L.minutesHint({ source: 'none', siteMin: 0, otherBook: true }, { fileMin: 12 });
+  assert.match(other.long, /插件计的 12 分钟是阅读器里开着的那本书的/);
+});
+
+test('摘句出处一小行；打过卡先收起来，有新摘的句子就不收', () => {
+  assert.equal(L.placeLabel({ location: '第 1 章 神经网络的思想', page: '12' }), '第 1 章 神经网络的思想 · 第 12 页');
+  assert.equal(L.placeLabel({ location: '第 1 章' }), '第 1 章');
+  assert.equal(L.placeLabel({ page: '3' }), '第 3 页');
+  assert.equal(L.placeLabel(null), '');
+  assert.equal(L.foldChecked({ checked: true, newItems: 0 }), true);
+  assert.equal(L.foldChecked({ checked: true, newItems: 2 }), false, '还有新摘的，展开着');
+  assert.equal(L.foldChecked({ checked: false, newItems: 0 }), false);
+});
+
+test('交过的那句还选着：记号按整理过的文字算，再打开窗口不会又摘一次', () => {
+  const Clips = require('../src/clips');
+  const a = Clips.sentKey('2026-11-26', 'Books/a.epub', '称为该神经元的\n加权输入。');
+  assert.equal(a, Clips.sentKey('2026-11-26', 'Books/a.epub', Clips.cleanText('称为该神经元的\n加权输入。')));
+  assert.notEqual(a, Clips.sentKey('2026-11-27', 'Books/a.epub', '称为该神经元的\n加权输入。'), '第二天可以再摘');
 });

@@ -91,28 +91,43 @@ function excerptItems({ clips = [], highlights = [] }) {
 }
 
 /**
- * 打卡窗口最上面一行：《书》 · N 分钟 · 读到 P%。没填的写“分钟没填”“进度没填”。
+ * 分钟格子下面那一行短短的说明（一句话）。long 是点“怎么算的”才看到的详细说明。
+ * warn：要学生自己看一眼、填一下（没计到时间、不是插件计的）。
  */
-function summaryText({ title = '', minutes = '', percent = '', isNew = false }) {
-  const t = title ? `《${title}》${isNew ? '（加到书架）' : ''}` : '书没选';
-  const m = String(minutes).trim() ? `${String(minutes).trim()} 分钟` : '分钟没填';
-  const pc = String(percent).trim() ? `读到 ${String(percent).trim()}%` : '进度没填';
-  return `${t} · ${m} · ${pc}`;
+function minutesHint(plan, { fileMin = 0, fromLog = 0 } = {}) {
+  const long = [];
+  let text;
+  let warn = false;
+  if (plan.source === 'clock') {
+    text = plan.siteMin ? `插件计时：网站上已记 ${plan.siteMin} 分钟，加上新读的 ${plan.freshMin} 分钟` : `插件计时 ${plan.clockMin} 分钟`;
+  } else if (plan.source === 'qiaomu') {
+    text = '按 Qiaomu Reader 的计时先填的，请看一下对不对';
+    warn = true;
+    long.push(`插件今天没为这本书计到时间。Qiaomu Reader 自己记的今天所有书一共 ${fromLog} 分钟，别的书已经记过的减掉了。`);
+  } else {
+    text = plan.siteMin ? `网站上今天已记 ${plan.siteMin} 分钟` : '还没计到时间，请填个大概的分钟数';
+    warn = !plan.siteMin;
+  }
+  if (plan.source !== 'clock') {
+    long.push('在 Qiaomu Reader 里打开这本书读，插件会自动计时：Obsidian 在最前面、3 分钟内翻过页、滚动过或动过鼠标才算，8 分钟之内回来的会补上停下的那段。');
+  }
+  if (plan.otherBook) long.push(`插件计的 ${fileMin} 分钟是阅读器里开着的那本书的，选了别的书就不算进去。`);
+  return { text, warn, long: long.join('') };
+}
+
+/** 摘句出处的一小行：“第 1 章 … · 第 12 页”；都没有就是空。 */
+function placeLabel(place) {
+  const loc = String((place && place.location) || '').trim();
+  const page = String((place && place.page) || '').trim();
+  return [loc, page ? `第 ${page} 页` : ''].filter(Boolean).join(' · ');
 }
 
 /**
- * 书、分钟、进度要不要一打开就展开给人看（默认收成一行摘要，点“改”再展开）。
- * 有一样拿不准就展开，并说为什么：没找到阅读器里的书、分钟没计到、进度没有、新书没书名。
- * 返回原因的列表，空就是不用展开。
+ * 今天已经打过卡：窗口先收成一行“今天已打卡 · N 分钟”，点“再交一次”才展开。
+ * 还有新摘的句子没交时不收（打开窗口多半就是来交它们的）。
  */
-function detailReasons({ hasFile = true, minutes = '', percent = '', source = 'clock', isNew = false, newTitle = '' }) {
-  const why = [];
-  if (!hasFile) why.push('没找到阅读器里正在读的书，请选一下是哪本');
-  if (isNew && !String(newTitle).trim()) why.push('请填书名');
-  if (!String(minutes).trim()) why.push('今天还没计到这本书的阅读时间，请填分钟数');
-  else if (source !== 'clock') why.push('分钟数不是插件计时得来的，请看一下对不对');
-  if (!String(percent).trim()) why.push('请填读到百分之几');
-  return why;
+function foldChecked({ checked = false, newItems = 0 } = {}) {
+  return !!checked && newItems === 0;
 }
 
 /**
@@ -140,5 +155,5 @@ function canAutoClose({ left = 0, heldHighlights = false, coverProblem = false }
 
 module.exports = {
   minutesPlan, normalizeNumber, checkMinutes, checkPercent, sendCount, shortPath,
-  excerptItems, summaryText, detailReasons, ribbonAction, shouldRemind, canAutoClose, REMIND_MIN_SEC,
+  excerptItems, minutesHint, placeLabel, foldChecked, ribbonAction, shouldRemind, canAutoClose, REMIND_MIN_SEC,
 };

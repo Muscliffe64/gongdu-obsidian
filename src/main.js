@@ -238,6 +238,8 @@ class GongduPlugin extends Plugin {
     const { text, range } = r && r.leaf.view && r.leaf.view.containerEl ? R.selection(r.leaf.view.containerEl) : { text: '', range: null };
     if (!text) { if (loud) new Notice('先在书里选中一句话，再摘。'); return null; }
     const day = Q.dayOf(Date.now());
+    // 今天已经交上去的那句还选着（打完卡再打开窗口时）：不再摘一次
+    if (this.sentKeys && this.sentKeys.has(Clips.sentKey(day, r.file.path, text))) { if (loud) new Notice('这句今天已经交过了。'); return null; }
     this.data.clips = Clips.pruneDays(this.data.clips, day);
     const out = Clips.add(this.data.clips, { text, book: r.file.path, day, now: Date.now(), ...this.placeNow(r, '', range) });
     if (!out) return null;
@@ -304,6 +306,12 @@ class GongduPlugin extends Plugin {
   }
 
   /** 交上去的摘句去掉。 */
+  /** 记下今天交上去的摘句（只记在内存里），书里还选着它时不再摘一次。 */
+  markSent(clips) {
+    if (!this.sentKeys) this.sentKeys = new Set();
+    for (const c of clips) this.sentKeys.add(Clips.sentKey(c.day, c.book, c.text));
+  }
+
   async dropClips(ids) {
     if (!ids.length) return;
     this.data.clips = Clips.remove(this.data.clips, ids);
